@@ -31,6 +31,9 @@ const providerLabelMap: Record<Provider, string> = {
   openrouter: "OvaCare Model 1.21",
 };
 
+const truncateLabel = (label: string, max = 22) =>
+  label.length > max ? `${label.slice(0, max)}...` : label;
+
 const AIIntakePanel = ({ data, result }: Props) => {
   const { toast } = useToast();
   const [provider, setProvider] = useState<Provider>("groq");
@@ -159,12 +162,13 @@ const AIIntakePanel = ({ data, result }: Props) => {
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-center">
           <Button
             type="button"
             variant={provider === "groq" ? "default" : "outline"}
             onClick={() => setProvider("groq")}
             size="sm"
+            className="w-full text-xs sm:text-sm"
           >
             {providerLabelMap.groq}
           </Button>
@@ -173,10 +177,16 @@ const AIIntakePanel = ({ data, result }: Props) => {
             variant={provider === "openrouter" ? "default" : "outline"}
             onClick={() => setProvider("openrouter")}
             size="sm"
+            className="w-full text-xs sm:text-sm"
           >
             {providerLabelMap.openrouter}
           </Button>
-          <Button type="button" className="ml-auto gradient-primary border-0" onClick={() => void handleGenerate()} disabled={loading}>
+          <Button
+            type="button"
+            className="gradient-primary w-full border-0 md:w-auto"
+            onClick={() => void handleGenerate()}
+            disabled={loading}
+          >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             Generate AI Intake
           </Button>
@@ -185,12 +195,18 @@ const AIIntakePanel = ({ data, result }: Props) => {
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-border p-3">
             <p className="mb-2 text-xs font-semibold text-muted-foreground">Top Risk Drivers (Points)</p>
-            <div className="h-40">
+            <div className="h-52 md:h-56">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={factorChartData} layout="vertical" margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                <BarChart data={factorChartData} layout="vertical" margin={{ top: 8, right: 10, left: 10, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis type="number" />
-                  <YAxis type="category" dataKey="factor" width={120} tick={{ fontSize: 11 }} />
+                  <YAxis
+                    type="category"
+                    dataKey="factor"
+                    width={140}
+                    tick={{ fontSize: 11 }}
+                    tickFormatter={(value) => truncateLabel(String(value), 20)}
+                  />
                   <Tooltip />
                   <Bar dataKey="points" fill="hsl(var(--primary))" radius={[0, 6, 6, 0]} />
                 </BarChart>
@@ -200,14 +216,14 @@ const AIIntakePanel = ({ data, result }: Props) => {
 
           <div className="rounded-xl border border-border p-3">
             <p className="mb-2 text-xs font-semibold text-muted-foreground">Current vs Projected Risk</p>
-            <div className="h-40">
+            <div className="h-52 md:h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={compareChartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" />
                   <YAxis domain={[0, 100]} />
                   <Tooltip />
-                  <Bar dataKey="risk" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="risk" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]} barSize={48} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -218,7 +234,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
           <div className="space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-primary">Summary</p>
-              <p className="mt-1 text-sm text-foreground">{analysis.summary}</p>
+              <p className="mt-1 text-sm leading-relaxed text-foreground">{analysis.summary}</p>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
