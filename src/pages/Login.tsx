@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowRight, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import GoogleLogo from "@/components/GoogleLogo";
 import {
   Card,
   CardContent,
@@ -147,20 +148,6 @@ const Login = () => {
             </div>
           )}
 
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={() => void handleGoogleLogin()}
-            disabled={loading || !isFirebaseConfigured}
-          >
-            Continue with Google
-          </Button>
-
-          <div className="relative text-center text-xs text-muted-foreground">
-            <span className="bg-card px-2">or log in with email</span>
-            <div className="absolute inset-x-0 top-1/2 -z-10 border-t" />
-          </div>
-
           <form className="space-y-3" onSubmit={handleEmailLogin}>
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
@@ -197,6 +184,21 @@ const Login = () => {
               {loading ? "Signing in..." : "Log in"}
             </Button>
           </form>
+
+          <div className="relative pt-1 text-center text-xs text-muted-foreground">
+            <span className="bg-card px-2">or continue with</span>
+            <div className="absolute inset-x-0 top-1/2 -z-10 border-t" />
+          </div>
+
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => void handleGoogleLogin()}
+            disabled={loading || !isFirebaseConfigured}
+          >
+            <GoogleLogo className="h-4 w-4" />
+            Continue with Google
+          </Button>
         </CardContent>
 
         <CardFooter className="flex-col gap-2">

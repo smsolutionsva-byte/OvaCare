@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AlertCircle, Mail, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import GoogleLogo from "@/components/GoogleLogo";
 import {
   Card,
   CardContent,
@@ -102,20 +103,6 @@ const Signup = () => {
             </div>
           )}
 
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={() => void handleGoogleSignup()}
-            disabled={loading || !isFirebaseConfigured}
-          >
-            Continue with Google
-          </Button>
-
-          <div className="relative text-center text-xs text-muted-foreground">
-            <span className="bg-card px-2">or create with email</span>
-            <div className="absolute inset-x-0 top-1/2 -z-10 border-t" />
-          </div>
-
           <form className="space-y-3" onSubmit={handleEmailSignup}>
             <div className="space-y-1.5">
               <Label htmlFor="fullName">Full name</Label>
@@ -176,6 +163,21 @@ const Signup = () => {
               {loading ? "Creating account..." : "Create account"}
             </Button>
           </form>
+
+          <div className="relative pt-1 text-center text-xs text-muted-foreground">
+            <span className="bg-card px-2">or continue with</span>
+            <div className="absolute inset-x-0 top-1/2 -z-10 border-t" />
+          </div>
+
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => void handleGoogleSignup()}
+            disabled={loading || !isFirebaseConfigured}
+          >
+            <GoogleLogo className="h-4 w-4" />
+            Continue with Google
+          </Button>
         </CardContent>
 
         <CardFooter className="justify-center text-sm text-muted-foreground">
