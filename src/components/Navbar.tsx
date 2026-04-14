@@ -1,11 +1,13 @@
 import { Link, useLocation } from "react-router-dom";
-import { Heart, Menu, X } from "lucide-react";
+import { Heart, LogOut, Menu, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/context/AuthContext";
 
 const Navbar = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+  const { user, signOutUser, isConfigured } = useAuth();
 
   const links = [
     { to: "/", label: "Home" },
@@ -40,12 +42,26 @@ const Navbar = () => {
         </div>
 
         <div className="hidden md:flex items-center gap-2">
-          <Button variant="ghost" size="sm" asChild>
-            <Link to="/login">Log in</Link>
-          </Button>
-          <Button size="sm" className="gradient-primary border-0" asChild>
-            <Link to="/signup">Sign up</Link>
-          </Button>
+          {user ? (
+            <>
+              <span className="max-w-36 truncate text-xs text-muted-foreground">
+                {user.email}
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => void signOutUser()}>
+                <LogOut className="h-4 w-4" />
+                Logout
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" asChild>
+                <Link to="/login">Log in</Link>
+              </Button>
+              <Button size="sm" className="gradient-primary border-0" asChild>
+                <Link to="/signup">Sign up</Link>
+              </Button>
+            </>
+          )}
         </div>
 
         <button
@@ -69,12 +85,33 @@ const Navbar = () => {
             </Link>
           ))}
           <div className="mt-4 flex flex-col gap-2">
-            <Button variant="ghost" size="sm" asChild>
-              <Link to="/login" onClick={() => setMobileOpen(false)}>Log in</Link>
-            </Button>
-            <Button size="sm" className="gradient-primary border-0" asChild>
-              <Link to="/signup" onClick={() => setMobileOpen(false)}>Sign up</Link>
-            </Button>
+            {user ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setMobileOpen(false);
+                  void signOutUser();
+                }}
+              >
+                <LogOut className="h-4 w-4" />
+                Logout
+              </Button>
+            ) : (
+              <>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link to="/login" onClick={() => setMobileOpen(false)}>Log in</Link>
+                </Button>
+                <Button size="sm" className="gradient-primary border-0" asChild>
+                  <Link to="/signup" onClick={() => setMobileOpen(false)}>Sign up</Link>
+                </Button>
+              </>
+            )}
+            {!isConfigured && (
+              <p className="px-1 text-xs text-destructive">
+                Configure Firebase env vars to enable auth.
+              </p>
+            )}
           </div>
         </div>
       )}
