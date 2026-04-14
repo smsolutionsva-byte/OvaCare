@@ -188,46 +188,8 @@ const AIIntakePanel = ({ data, result }: Props) => {
             disabled={loading}
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            Generate AI Intake
+            Generate Insight
           </Button>
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-xl border border-border p-3">
-            <p className="mb-2 text-xs font-semibold text-muted-foreground">Top Risk Drivers (Points)</p>
-            <div className="h-52 md:h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={factorChartData} layout="vertical" margin={{ top: 8, right: 10, left: 10, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" />
-                  <YAxis
-                    type="category"
-                    dataKey="factor"
-                    width={140}
-                    tick={{ fontSize: 11 }}
-                    tickFormatter={(value) => truncateLabel(String(value), 20)}
-                  />
-                  <Tooltip />
-                  <Bar dataKey="points" fill="hsl(var(--primary))" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-border p-3">
-            <p className="mb-2 text-xs font-semibold text-muted-foreground">Current vs Projected Risk</p>
-            <div className="h-52 md:h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={compareChartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis domain={[0, 100]} />
-                  <Tooltip />
-                  <Bar dataKey="risk" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]} barSize={48} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
         </div>
 
         {analysis && (
@@ -235,6 +197,44 @@ const AIIntakePanel = ({ data, result }: Props) => {
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-primary">Summary</p>
               <p className="mt-1 text-sm leading-relaxed text-foreground">{analysis.summary}</p>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-border bg-card p-3">
+                <p className="mb-2 text-xs font-semibold text-muted-foreground">Top Risk Drivers (Points)</p>
+                <div className="h-52 md:h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={factorChartData} layout="vertical" margin={{ top: 8, right: 10, left: 10, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" />
+                      <YAxis
+                        type="category"
+                        dataKey="factor"
+                        width={140}
+                        tick={{ fontSize: 11 }}
+                        tickFormatter={(value) => truncateLabel(String(value), 20)}
+                      />
+                      <Tooltip />
+                      <Bar dataKey="points" fill="hsl(var(--primary))" radius={[0, 6, 6, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border bg-card p-3">
+                <p className="mb-2 text-xs font-semibold text-muted-foreground">Current vs Projected Risk</p>
+                <div className="h-52 md:h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={compareChartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" />
+                      <YAxis domain={[0, 100]} />
+                      <Tooltip />
+                      <Bar dataKey="risk" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]} barSize={48} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">

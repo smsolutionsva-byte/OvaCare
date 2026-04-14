@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, ArrowRight, Stethoscope } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/AuthContext";
 import { calculateRisk, type SymptomData, type RiskResult } from "@/lib/riskCalculator";
 import RiskMeter from "@/components/RiskMeter";
 import AIIntakePanel from "@/components/AIIntakePanel";
@@ -22,6 +25,9 @@ const defaultData: SymptomData = {
 const steps = ["Basic Info", "Symptoms", "Lifestyle", "Results"];
 
 const Predict = () => {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const { user } = useAuth();
   const [step, setStep] = useState(0);
   const [data, setData] = useState<SymptomData>(defaultData);
   const [result, setResult] = useState<RiskResult | null>(null);
@@ -44,6 +50,24 @@ const Predict = () => {
     }
   };
   const prev = () => setStep((s) => Math.max(s - 1, 0));
+
+  const handleAIIntakeToggle = () => {
+    if (showAIIntake) {
+      setShowAIIntake(false);
+      return;
+    }
+
+    if (!user) {
+      toast({
+        title: "Login required",
+        description: "Please log in to use AI intake insights.",
+      });
+      navigate("/login");
+      return;
+    }
+
+    setShowAIIntake(true);
+  };
 
   const RadioOption = ({ name, value, label }: { name: keyof SymptomData; value: string; label: string }) => (
     <div className="flex items-center gap-2">
@@ -231,7 +255,7 @@ const Predict = () => {
               </p>
 
               <div className="space-y-2">
-                <Button variant="outline" className="w-full" onClick={() => setShowAIIntake((v) => !v)}>
+                <Button variant="outline" className="w-full" onClick={handleAIIntakeToggle}>
                   {showAIIntake ? "Hide AI Intake" : "Open AI Intake"}
                 </Button>
                 {showAIIntake && <AIIntakePanel data={data} result={result} />}
