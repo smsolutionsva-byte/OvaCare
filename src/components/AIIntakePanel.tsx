@@ -18,6 +18,7 @@ type AIIntakeResponse = {
   carePlan30Days: string[];
   projectedRisk: number;
   confidence: "low" | "medium" | "high";
+  providerUsed?: Provider;
 };
 
 type Props = {
@@ -103,18 +104,25 @@ const AIIntakePanel = ({ data, result }: Props) => {
       });
 
       if (!response.ok) {
-        throw new Error("AI endpoint is unavailable right now.");
+        const errorData = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          details?: string[];
+        };
+
+        const detail = errorData.details?.[0];
+        throw new Error(detail || errorData.error || "AI endpoint is unavailable right now.");
       }
 
       const json = (await response.json()) as AIIntakeResponse;
       setAnalysis(json);
-      toast({ title: "AI intake ready", description: `Generated with ${provider}.` });
-    } catch (_error) {
+      toast({ title: "AI intake ready", description: `Generated with ${json.providerUsed || provider}.` });
+    } catch (error) {
       const fallback = getLocalFallback();
       setAnalysis(fallback);
+      const message = error instanceof Error ? error.message : "AI service unavailable.";
       toast({
         title: "Using local draft",
-        description: "AI key not found or service unavailable. Showing a structured non-AI intake draft.",
+        description: `${message} Showing a structured non-AI intake draft.`,
       });
     } finally {
       setLoading(false);

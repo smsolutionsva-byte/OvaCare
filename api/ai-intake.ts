@@ -16,6 +16,7 @@ type ModelResponse = {
   carePlan30Days: string[];
   projectedRisk: number;
   confidence: "low" | "medium" | "high";
+  providerUsed?: Provider;
 };
 
 const SYSTEM_PROMPT = [
@@ -111,7 +112,7 @@ const callGroq = async (payload: IntakePayload) => {
   return extractJsonFromText(content);
 };
 
-const callOpenRouter = async (payload: IntakePayload) => {
+const callOpenRouter = async (payload: IntakePayload, referer?: string) => {
   const apiKey = process.env.OPENROUTER_API_KEY;
 
   if (!apiKey) {
@@ -125,7 +126,7 @@ const callOpenRouter = async (payload: IntakePayload) => {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
-      "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://example.com",
+      "HTTP-Referer": process.env.OPENROUTER_SITE_URL || referer || "https://example.com",
       "X-Title": process.env.OPENROUTER_APP_NAME || "OvaCare",
     },
     body: JSON.stringify({
@@ -154,6 +155,17 @@ const callOpenRouter = async (payload: IntakePayload) => {
   return extractJsonFromText(content);
 };
 
+const hasGroqKey = () => !!process.env.GROQ_API_KEY;
+const hasOpenRouterKey = () => !!process.env.OPENROUTER_API_KEY;
+
+const callProvider = async (provider: Provider, payload: IntakePayload, referer?: string) => {
+  if (provider === "groq") {
+    return callGroq(payload);
+  }
+
+  return callOpenRouter(payload, referer);
+};
+
 export default async function handler(req: any, res: any) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -164,6 +176,7 @@ export default async function handler(req: any, res: any) {
 
     const provider: Provider = body.provider === "openrouter" ? "openrouter" : "groq";
     const payload = (body.payload || {}) as IntakePayload;
+    const refererHeader = req.headers?.origin || req.headers?.referer;
 
     if (!payload || typeof payload !== "object") {
       return res.status(400).json({ error: "Missing payload" });
@@ -171,10 +184,41 @@ export default async function handler(req: any, res: any) {
 
     const baselineRisk = clampRisk(payload.baselineRisk, 0);
 
-    const raw = provider === "openrouter" ? await callOpenRouter(payload) : await callGroq(payload);
-    const normalized = normalizeOutput(raw, baselineRisk);
+    const availability = {
+      groq: hasGroqKey(),
+      openrouter: hasOpenRouterKey(),
+    };
 
-    return res.status(200).json(normalized);
+    if (!availability.groq && !availability.openrouter) {
+      return res.status(500).json({
+        error: "No AI provider key configured. Add GROQ_API_KEY or OPENROUTER_API_KEY in Vercel env vars.",
+      });
+    }
+
+    const providersToTry: Provider[] = [provider, provider === "groq" ? "openrouter" : "groq"];
+    const uniqueProviders = [...new Set(providersToTry)] as Provider[];
+    const errors: string[] = [];
+
+    for (const candidate of uniqueProviders) {
+      if (!availability[candidate]) {
+        errors.push(`${candidate}: API key missing`);
+        continue;
+      }
+
+      try {
+        const raw = await callProvider(candidate, payload, refererHeader);
+        const normalized = normalizeOutput(raw, baselineRisk);
+        return res.status(200).json({ ...normalized, providerUsed: candidate });
+      } catch (candidateError) {
+        const message = candidateError instanceof Error ? candidateError.message : "Unknown provider error";
+        errors.push(`${candidate}: ${message}`);
+      }
+    }
+
+    return res.status(500).json({
+      error: "All configured AI providers failed.",
+      details: errors,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown AI server error";
     return res.status(500).json({ error: message });
