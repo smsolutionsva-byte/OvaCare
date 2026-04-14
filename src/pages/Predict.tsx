@@ -25,6 +25,9 @@ const Predict = () => {
   const [step, setStep] = useState(0);
   const [data, setData] = useState<SymptomData>(defaultData);
   const [result, setResult] = useState<RiskResult | null>(null);
+  const [showAllFactors, setShowAllFactors] = useState(false);
+  const [showAllRecommendations, setShowAllRecommendations] = useState(false);
+  const [showAIIntake, setShowAIIntake] = useState(false);
 
   const set = <K extends keyof SymptomData>(key: K, val: SymptomData[K]) =>
     setData((d) => ({ ...d, [key]: val }));
@@ -32,6 +35,9 @@ const Predict = () => {
   const next = () => {
     if (step === 2) {
       setResult(calculateRisk(data));
+      setShowAllFactors(false);
+      setShowAllRecommendations(false);
+      setShowAIIntake(false);
       setStep(3);
     } else {
       setStep((s) => Math.min(s + 1, 3));
@@ -69,9 +75,9 @@ const Predict = () => {
   );
 
   return (
-    <div className="container mx-auto max-w-2xl px-4 py-12">
+    <div className="container mx-auto max-w-3xl px-4 py-8 md:py-10">
       {/* Steps indicator */}
-      <div className="mb-10 flex items-center justify-center gap-2">
+      <div className="mb-6 flex items-center justify-center gap-2 md:mb-8">
         {steps.map((s, i) => (
           <div key={s} className="flex items-center gap-2">
             <div className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors ${
@@ -92,10 +98,10 @@ const Predict = () => {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -20 }}
           transition={{ duration: 0.3 }}
-          className="rounded-2xl border border-border bg-card p-6 shadow-card md:p-8"
+          className="rounded-2xl border border-border bg-card p-4 shadow-card md:p-6"
         >
           {step === 0 && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               <h2 className="font-heading text-xl font-bold text-foreground">Basic Information</h2>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
@@ -119,12 +125,16 @@ const Predict = () => {
           )}
 
           {step === 1 && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               <h2 className="font-heading text-xl font-bold text-foreground">Symptoms</h2>
-              <SeverityRadio name="acne" label="Acne severity" />
-              <SeverityRadio name="hairGrowth" label="Excess hair growth (face/body)" />
-              <SeverityRadio name="hairLoss" label="Hair thinning / loss" />
-              <div className="space-y-3 pt-2">
+              <div className="grid gap-4 md:grid-cols-2">
+                <SeverityRadio name="acne" label="Acne severity" />
+                <SeverityRadio name="hairGrowth" label="Excess hair growth (face/body)" />
+                <div className="md:col-span-2">
+                  <SeverityRadio name="hairLoss" label="Hair thinning / loss" />
+                </div>
+              </div>
+              <div className="grid gap-2 pt-1 sm:grid-cols-2">
                 <CheckOption name="weightGain" label="Unexplained weight gain" />
                 <CheckOption name="fatigue" label="Chronic fatigue" />
                 <CheckOption name="moodSwings" label="Frequent mood swings" />
@@ -135,76 +145,103 @@ const Predict = () => {
           )}
 
           {step === 2 && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               <h2 className="font-heading text-xl font-bold text-foreground">Lifestyle</h2>
-              <div>
-                <Label className="mb-2 block text-sm font-medium">Exercise frequency</Label>
-                <RadioGroup value={data.exercise} onValueChange={(v) => set("exercise", v as any)} className="flex flex-wrap gap-4">
-                  <RadioOption name="exercise" value="none" label="None" />
-                  <RadioOption name="exercise" value="light" label="Light" />
-                  <RadioOption name="exercise" value="moderate" label="Moderate" />
-                  <RadioOption name="exercise" value="intense" label="Intense" />
-                </RadioGroup>
-              </div>
-              <div>
-                <Label className="mb-2 block text-sm font-medium">Diet quality</Label>
-                <RadioGroup value={data.diet} onValueChange={(v) => set("diet", v as any)} className="flex flex-wrap gap-4">
-                  <RadioOption name="diet" value="balanced" label="Balanced" />
-                  <RadioOption name="diet" value="mostly_processed" label="Mostly processed" />
-                  <RadioOption name="diet" value="irregular" label="Irregular meals" />
-                </RadioGroup>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <Label className="mb-2 block text-sm font-medium">Exercise frequency</Label>
+                  <RadioGroup value={data.exercise} onValueChange={(v) => set("exercise", v as any)} className="flex flex-wrap gap-3">
+                    <RadioOption name="exercise" value="none" label="None" />
+                    <RadioOption name="exercise" value="light" label="Light" />
+                    <RadioOption name="exercise" value="moderate" label="Moderate" />
+                    <RadioOption name="exercise" value="intense" label="Intense" />
+                  </RadioGroup>
+                </div>
+                <div>
+                  <Label className="mb-2 block text-sm font-medium">Diet quality</Label>
+                  <RadioGroup value={data.diet} onValueChange={(v) => set("diet", v as any)} className="flex flex-wrap gap-3">
+                    <RadioOption name="diet" value="balanced" label="Balanced" />
+                    <RadioOption name="diet" value="mostly_processed" label="Mostly processed" />
+                    <RadioOption name="diet" value="irregular" label="Irregular meals" />
+                  </RadioGroup>
+                </div>
               </div>
             </div>
           )}
 
           {step === 3 && result && (
-            <div className="space-y-8">
+            <div className="space-y-5">
               <div className="text-center">
-                <Stethoscope className="mx-auto mb-3 h-8 w-8 text-primary" />
+                <Stethoscope className="mx-auto mb-2 h-7 w-7 text-primary" />
                 <h2 className="font-heading text-xl font-bold text-foreground">Your Risk Assessment</h2>
                 <p className="mt-1 text-sm text-muted-foreground">Based on your symptom profile</p>
               </div>
 
-              <div className="flex justify-center">
-                <RiskMeter score={result.score} level={result.level} />
-              </div>
-
-              {result.factors.length > 0 && (
-                <div>
-                  <h3 className="mb-3 font-heading text-sm font-semibold text-foreground">Contributing Factors</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {result.factors.map((f) => (
-                      <span key={f} className="rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent">
-                        {f}
-                      </span>
-                    ))}
+              <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
+                <div className="rounded-xl border border-border bg-card/60 p-3">
+                  <div className="flex justify-center">
+                    <RiskMeter score={result.score} level={result.level} />
                   </div>
                 </div>
-              )}
 
-              <div>
-                <h3 className="mb-3 font-heading text-sm font-semibold text-foreground">Recommendations</h3>
-                <ul className="space-y-2">
-                  {result.recommendations.map((r, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
-                      <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
-                      {r}
-                    </li>
-                  ))}
-                </ul>
+                <div className="space-y-4">
+                  {result.factors.length > 0 && (
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <h3 className="font-heading text-sm font-semibold text-foreground">Contributing Factors</h3>
+                        {result.factors.length > 6 && (
+                          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setShowAllFactors((v) => !v)}>
+                            {showAllFactors ? "Show less" : "Show all"}
+                          </Button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {(showAllFactors ? result.factors : result.factors.slice(0, 6)).map((f) => (
+                          <span key={f} className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent">
+                            {f}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="font-heading text-sm font-semibold text-foreground">Recommendations</h3>
+                      {result.recommendations.length > 4 && (
+                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setShowAllRecommendations((v) => !v)}>
+                          {showAllRecommendations ? "Show less" : "Show all"}
+                        </Button>
+                      )}
+                    </div>
+                    <ul className="grid gap-1.5 md:grid-cols-2">
+                      {(showAllRecommendations ? result.recommendations : result.recommendations.slice(0, 4)).map((r, i) => (
+                        <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                          <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
+                          {r}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
               </div>
 
-              <p className="rounded-xl bg-muted/50 p-4 text-center text-xs text-muted-foreground">
+              <p className="rounded-xl bg-muted/50 p-3 text-center text-xs text-muted-foreground">
                 ⚠️ This is not a medical diagnosis. Please consult a healthcare professional for proper evaluation.
               </p>
 
-              <AIIntakePanel data={data} result={result} />
+              <div className="space-y-2">
+                <Button variant="outline" className="w-full" onClick={() => setShowAIIntake((v) => !v)}>
+                  {showAIIntake ? "Hide AI Intake" : "Open AI Intake"}
+                </Button>
+                {showAIIntake && <AIIntakePanel data={data} result={result} />}
+              </div>
             </div>
           )}
 
           {/* Navigation */}
           {step < 3 && (
-            <div className="mt-8 flex justify-between">
+            <div className="mt-6 flex justify-between">
               <Button variant="ghost" onClick={prev} disabled={step === 0}>
                 <ArrowLeft className="mr-2 h-4 w-4" /> Back
               </Button>
@@ -215,8 +252,8 @@ const Predict = () => {
           )}
 
           {step === 3 && (
-            <div className="mt-6 flex justify-center">
-              <Button variant="outline" onClick={() => { setStep(0); setResult(null); }}>
+            <div className="mt-4 flex justify-center">
+              <Button variant="outline" onClick={() => { setStep(0); setResult(null); setShowAIIntake(false); }}>
                 Start Over
               </Button>
             </div>

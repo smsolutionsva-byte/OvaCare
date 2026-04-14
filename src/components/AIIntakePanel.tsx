@@ -26,6 +26,11 @@ type Props = {
   result: RiskResult;
 };
 
+const providerLabelMap: Record<Provider, string> = {
+  groq: "OvaCare Model 1.09",
+  openrouter: "OvaCare Model 1.21",
+};
+
 const AIIntakePanel = ({ data, result }: Props) => {
   const { toast } = useToast();
   const [provider, setProvider] = useState<Provider>("groq");
@@ -115,7 +120,8 @@ const AIIntakePanel = ({ data, result }: Props) => {
 
       const json = (await response.json()) as AIIntakeResponse;
       setAnalysis(json);
-      toast({ title: "AI intake ready", description: `Generated with ${json.providerUsed || provider}.` });
+      const usedProvider = json.providerUsed || provider;
+      toast({ title: "AI intake ready", description: `Generated with ${providerLabelMap[usedProvider]}.` });
     } catch (error) {
       const fallback = getLocalFallback();
       setAnalysis(fallback);
@@ -131,17 +137,17 @@ const AIIntakePanel = ({ data, result }: Props) => {
 
   return (
     <Card className="border-border/70 bg-card/95 shadow-card">
-      <CardHeader>
+      <CardHeader className="space-y-1 p-4 pb-2">
         <CardTitle className="flex items-center gap-2 font-heading text-lg">
           <Brain className="h-5 w-5 text-primary" />
-          AI Clinical Intake Copilot
+          AI Clinical Intake
         </CardTitle>
         <CardDescription>
           Add extra symptoms in plain language. AI generates structured intake, doctor questions, and projected risk trend.
         </CardDescription>
       </CardHeader>
 
-      <CardContent className="space-y-5">
+      <CardContent className="space-y-4 p-4 pt-2">
         <div className="space-y-2">
           <Label htmlFor="symptom-notes">Extra symptoms or concerns</Label>
           <Textarea
@@ -149,7 +155,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
             placeholder="Example: severe cramps, acne flare before periods, sugar cravings, sleeping 5 hours, stress at work"
             value={notes}
             onChange={(event) => setNotes(event.target.value)}
-            rows={4}
+            rows={3}
           />
         </div>
 
@@ -160,7 +166,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
             onClick={() => setProvider("groq")}
             size="sm"
           >
-            Groq
+            {providerLabelMap.groq}
           </Button>
           <Button
             type="button"
@@ -168,7 +174,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
             onClick={() => setProvider("openrouter")}
             size="sm"
           >
-            OpenRouter
+            {providerLabelMap.openrouter}
           </Button>
           <Button type="button" className="ml-auto gradient-primary border-0" onClick={() => void handleGenerate()} disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -179,7 +185,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-border p-3">
             <p className="mb-2 text-xs font-semibold text-muted-foreground">Top Risk Drivers (Points)</p>
-            <div className="h-52">
+            <div className="h-40">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={factorChartData} layout="vertical" margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -194,7 +200,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
 
           <div className="rounded-xl border border-border p-3">
             <p className="mb-2 text-xs font-semibold text-muted-foreground">Current vs Projected Risk</p>
-            <div className="h-52">
+            <div className="h-40">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={compareChartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" />
