@@ -43,6 +43,31 @@ In Vercel project settings -> Environment Variables, add the same `VITE_*` varia
 
 After adding vars, redeploy.
 
+## AI intake copilot setup (Groq or OpenRouter)
+
+This project includes a secure server endpoint at `/api/ai-intake`.
+API keys are server-side only. Do not add them as `VITE_*` variables.
+
+Add one or both providers in Vercel env vars:
+
+```env
+GROQ_API_KEY=...
+GROQ_MODEL=llama-3.3-70b-versatile
+
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=meta-llama/llama-3.1-8b-instruct
+OPENROUTER_SITE_URL=https://your-domain.com
+OPENROUTER_APP_NAME=OvaCare
+```
+
+After adding AI env vars, redeploy. On the Risk Predictor results page, users can type additional symptoms and generate:
+
+- Structured intake summary
+- Red-flag checks
+- Follow-up doctor questions
+- 30-day plan
+- Current vs projected risk chart
+
 ## Authorized domains and redirect URLs
 
 In Firebase Authentication settings:

@@ -18,40 +18,49 @@ export interface RiskResult {
   score: number;
   level: "low" | "moderate" | "high";
   factors: string[];
+  breakdown: { label: string; score: number }[];
   recommendations: string[];
 }
 
 export function calculateRisk(data: SymptomData): RiskResult {
   let score = 0;
   const factors: string[] = [];
+  const breakdown: { label: string; score: number }[] = [];
+
+  const addFactor = (label: string, points: number) => {
+    if (points <= 0) return;
+    score += points;
+    factors.push(label);
+    breakdown.push({ label, score: points });
+  };
 
   // Period regularity (major factor)
-  if (data.periodRegularity === "irregular") { score += 20; factors.push("Irregular periods"); }
-  if (data.periodRegularity === "absent") { score += 30; factors.push("Absent periods"); }
+  if (data.periodRegularity === "irregular") { addFactor("Irregular periods", 20); }
+  if (data.periodRegularity === "absent") { addFactor("Absent periods", 30); }
 
   // BMI
-  if (data.bmi >= 25 && data.bmi < 30) { score += 8; factors.push("Overweight BMI"); }
-  if (data.bmi >= 30) { score += 15; factors.push("Obese BMI"); }
+  if (data.bmi >= 25 && data.bmi < 30) { addFactor("Overweight BMI", 8); }
+  if (data.bmi >= 30) { addFactor("Obese BMI", 15); }
 
   // Symptoms
   const severityScore = { none: 0, mild: 3, moderate: 7, severe: 12 };
-  if (data.acne !== "none") { score += severityScore[data.acne]; factors.push(`Acne (${data.acne})`); }
-  if (data.hairGrowth !== "none") { score += severityScore[data.hairGrowth]; factors.push(`Excess hair growth (${data.hairGrowth})`); }
-  if (data.hairLoss !== "none") { score += severityScore[data.hairLoss]; factors.push(`Hair thinning (${data.hairLoss})`); }
+  if (data.acne !== "none") { addFactor(`Acne (${data.acne})`, severityScore[data.acne]); }
+  if (data.hairGrowth !== "none") { addFactor(`Excess hair growth (${data.hairGrowth})`, severityScore[data.hairGrowth]); }
+  if (data.hairLoss !== "none") { addFactor(`Hair thinning (${data.hairLoss})`, severityScore[data.hairLoss]); }
 
-  if (data.weightGain) { score += 5; factors.push("Unexplained weight gain"); }
-  if (data.fatigue) { score += 3; factors.push("Chronic fatigue"); }
-  if (data.moodSwings) { score += 3; factors.push("Mood swings"); }
-  if (data.darkPatches) { score += 6; factors.push("Dark skin patches (Acanthosis)"); }
-  if (data.familyHistory) { score += 10; factors.push("Family history of PCOS"); }
+  if (data.weightGain) { addFactor("Unexplained weight gain", 5); }
+  if (data.fatigue) { addFactor("Chronic fatigue", 3); }
+  if (data.moodSwings) { addFactor("Mood swings", 3); }
+  if (data.darkPatches) { addFactor("Dark skin patches (Acanthosis)", 6); }
+  if (data.familyHistory) { addFactor("Family history of PCOS", 10); }
 
   // Lifestyle
-  if (data.exercise === "none") { score += 5; }
-  if (data.diet === "mostly_processed") { score += 4; }
-  if (data.diet === "irregular") { score += 3; }
+  if (data.exercise === "none") { addFactor("Low exercise level", 5); }
+  if (data.diet === "mostly_processed") { addFactor("Mostly processed diet", 4); }
+  if (data.diet === "irregular") { addFactor("Irregular meals", 3); }
 
   // Age factor
-  if (data.age >= 18 && data.age <= 35) { score += 3; }
+  if (data.age >= 18 && data.age <= 35) { addFactor("Typical PCOS age bracket", 3); }
 
   score = Math.min(score, 100);
 
@@ -59,7 +68,7 @@ export function calculateRisk(data: SymptomData): RiskResult {
 
   const recommendations = getRecommendations(level, data);
 
-  return { score, level, factors, recommendations };
+  return { score, level, factors, breakdown, recommendations };
 }
 
 function getRecommendations(level: RiskResult["level"], data: SymptomData): string[] {

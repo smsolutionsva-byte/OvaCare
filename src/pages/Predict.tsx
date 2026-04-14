@@ -8,6 +8,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { calculateRisk, type SymptomData, type RiskResult } from "@/lib/riskCalculator";
 import RiskMeter from "@/components/RiskMeter";
+import AIIntakePanel from "@/components/AIIntakePanel";
 
 const defaultData: SymptomData = {
   age: 25, bmi: 22,
@@ -196,6 +197,8 @@ const Predict = () => {
               <p className="rounded-xl bg-muted/50 p-4 text-center text-xs text-muted-foreground">
                 ⚠️ This is not a medical diagnosis. Please consult a healthcare professional for proper evaluation.
               </p>
+
+              <AIIntakePanel data={data} result={result} />
             </div>
           )}
 
