@@ -196,13 +196,15 @@ const Analyze = () => {
   const handleExtract = async () => {
     if (!file) return;
 
+    let worker: Awaited<ReturnType<(typeof import("tesseract.js"))["createWorker"]>> | null = null;
+
     try {
       setOcrRunning(true);
       setOcrProgress(0);
       setInsight(null);
 
       const { createWorker } = await import("tesseract.js");
-      const worker = await createWorker("eng", 1, {
+      worker = await createWorker("eng", 1, {
         logger: (m) => {
           if (m.status === "recognizing text") {
             setOcrProgress(Math.round(m.progress * 100));
@@ -210,13 +212,36 @@ const Analyze = () => {
         },
       });
 
-      const {
-        data: { text },
-      } = await worker.recognize(file);
+      const firstPass = await worker.recognize(file);
+      let parsed = extractMeaningfulLabData(firstPass.data.text);
 
-      await worker.terminate();
+      // Table-heavy reports sometimes parse better with a page-segmentation fallback pass.
+      if (parsed.markers.length < 2 || !parsed.possibleReport) {
+        const secondPass = await worker.recognize(file, {
+          tessedit_pageseg_mode: "6",
+          preserve_interword_spaces: "1",
+        });
 
-      const parsed = extractMeaningfulLabData(text);
+        const fallbackParsed = extractMeaningfulLabData(secondPass.data.text);
+        const shouldUseFallback =
+          fallbackParsed.markers.length > parsed.markers.length ||
+          (!parsed.possibleReport && fallbackParsed.possibleReport);
+
+        if (shouldUseFallback) {
+          parsed = fallbackParsed;
+        }
+      }
+
+      if (!parsed.possibleReport) {
+        setExtraction(null);
+        toast({
+          title: "Image may not be a blood report",
+          description: "Could not find enough lab-specific signals. Please upload a clearer blood test report image.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       setExtraction(parsed);
 
       if (parsed.markers.length === 0) {
@@ -235,6 +260,9 @@ const Analyze = () => {
       const message = error instanceof Error ? error.message : "OCR extraction failed.";
       toast({ title: "Extraction failed", description: message, variant: "destructive" });
     } finally {
+      if (worker) {
+        await worker.terminate();
+      }
       setOcrRunning(false);
       setOcrProgress(0);
     }
