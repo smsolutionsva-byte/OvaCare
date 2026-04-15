@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ArrowRight, FileText, Activity, ShieldCheck, Brain } from "lucide-react";
+import { ArrowRight, FileText, Activity, ShieldCheck, Brain, LineChart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import heroImg from "@/assets/hero-illustration.png";
 
@@ -19,6 +19,11 @@ const features = [
     icon: Brain,
     title: "AI-Powered Insights",
     desc: "Our AI detects key medical terms and highlights abnormalities you should discuss with your doctor.",
+  },
+  {
+    icon: LineChart,
+    title: "Report Tracker Timeline",
+    desc: "Save monthly blood reports and visualize improvements or regressions with trend-first comparison charts.",
   },
   {
     icon: ShieldCheck,
@@ -66,6 +71,9 @@ const Landing = () => (
           <Button size="lg" variant="outline" className="px-8 text-base" asChild>
             <Link to="/analyze">Upload Report</Link>
           </Button>
+          <Button size="lg" variant="outline" className="px-8 text-base" asChild>
+            <Link to="/tracker">Open Tracker</Link>
+          </Button>
         </div>
       </motion.div>
 
@@ -84,7 +92,7 @@ const Landing = () => (
       <h2 className="mb-12 text-center font-heading text-2xl font-bold text-foreground md:text-3xl">
         How OvaCare Helps You
       </h2>
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
         {features.map((f, i) => (
           <motion.div
             key={f.title}

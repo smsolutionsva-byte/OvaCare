@@ -8,6 +8,7 @@ import { AuthProvider } from "@/context/AuthContext";
 import Landing from "@/pages/Landing";
 import Predict from "@/pages/Predict";
 import Analyze from "@/pages/Analyze";
+import ReportTracker from "@/pages/ReportTracker";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import NotFound from "@/pages/NotFound";
@@ -26,6 +27,7 @@ const App = () => (
             <Route path="/" element={<Landing />} />
             <Route path="/predict" element={<Predict />} />
             <Route path="/analyze" element={<Analyze />} />
+            <Route path="/tracker" element={<ReportTracker />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="*" element={<NotFound />} />

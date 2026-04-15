@@ -13,6 +13,7 @@ const Navbar = () => {
     { to: "/", label: "Home" },
     { to: "/predict", label: "Risk Predictor" },
     { to: "/analyze", label: "Report Analyzer" },
+    { to: "/tracker", label: "Report Tracker" },
   ];
 
   return (

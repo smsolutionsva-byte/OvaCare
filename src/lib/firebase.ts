@@ -1,5 +1,6 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { GoogleAuthProvider, browserLocalPersistence, getAuth, setPersistence } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -27,4 +28,12 @@ export const getFirebaseAuth = () => {
   const auth = getAuth(firebaseApp);
   void setPersistence(auth, browserLocalPersistence);
   return auth;
+};
+
+export const getFirebaseDb = () => {
+  if (!firebaseApp) {
+    throw new Error("Firebase is not configured. Set VITE_FIREBASE_* env vars.");
+  }
+
+  return getFirestore(firebaseApp);
 };

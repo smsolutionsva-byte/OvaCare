@@ -68,6 +68,52 @@ After adding AI env vars, redeploy. On the Risk Predictor results page, users ca
 - 30-day plan
 - Current vs projected risk chart
 
+## Report Tracker (Firebase-backed timeline)
+
+Report Tracker stores each logged blood report under the signed-in user's account in Firestore.
+
+Collection path used:
+
+```text
+users/{uid}/labReports/{reportId}
+```
+
+Each snapshot stores:
+
+- `testDate` (YYYY-MM-DD)
+- `reportTitle`
+- `source` (`ocr`)
+- `markers[]` (name, value, unit, ref range, status)
+- `createdAt`
+
+### Firestore setup
+
+1. In Firebase Console, open Build -> Firestore Database.
+2. Create database in production mode (recommended) or test mode (temporary).
+3. Add security rules so users can only access their own report timeline:
+
+```txt
+rules_version = '2';
+service cloud.firestore {
+	match /databases/{database}/documents {
+		match /users/{userId}/labReports/{reportId} {
+			allow read, write: if request.auth != null && request.auth.uid == userId;
+		}
+	}
+}
+```
+
+4. Deploy rules.
+
+No additional environment variables are required beyond existing `VITE_FIREBASE_*` values.
+
+## Product and standards references used
+
+- HL7 FHIR Observation (clinical measurement modeling): https://www.hl7.org/fhir/observation.html
+- CDC Diabetes Testing (example threshold framing and follow-up context): https://www.cdc.gov/diabetes/diabetes-testing/index.html
+- WHO Cardiovascular Diseases topic (risk factor context): https://www.who.int/health-topics/cardiovascular-diseases
+- Carbon Design System Data Visualization (dashboard storytelling patterns): https://carbondesignsystem.com/data-visualization/dashboards/
+
 ## Authorized domains and redirect URLs
 
 In Firebase Authentication settings:
