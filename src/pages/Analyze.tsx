@@ -95,6 +95,78 @@ const fallbackInsight = (markers: LabMarker[]): LabInsight => {
   };
 };
 
+const loadImage = (file: File) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to load image for OCR enhancement."));
+    };
+    image.src = url;
+  });
+
+const createEnhancedImageDataUrl = async (file: File) => {
+  const image = await loadImage(file);
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  if (!ctx) {
+    throw new Error("Canvas context unavailable for OCR enhancement.");
+  }
+
+  const baseWidth = Math.max(image.width, 1400);
+  const scale = Math.min(2.5, Math.max(1.5, baseWidth / image.width));
+  const width = Math.round(image.width * scale);
+  const height = Math.round(image.height * scale);
+
+  canvas.width = width;
+  canvas.height = height;
+
+  ctx.filter = "grayscale(1) contrast(180%) brightness(115%)";
+  ctx.drawImage(image, 0, 0, width, height);
+
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+
+  let graySum = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    graySum += data[i];
+  }
+  const grayMean = graySum / (data.length / 4);
+  const threshold = grayMean * 0.96;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const value = data[i];
+    const contrasted = (value - 128) * 1.8 + 128;
+    const leveled = contrasted > threshold ? contrasted + 24 : contrasted - 20;
+    const normalized = Math.max(0, Math.min(255, leveled));
+
+    data[i] = normalized;
+    data[i + 1] = normalized;
+    data[i + 2] = normalized;
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+};
+
+const scoreExtraction = (result: LabExtractionResult) => {
+  const rangeMarkers = result.markers.filter((marker) => marker.refMin != null && marker.refMax != null).length;
+
+  return (
+    result.markers.length * 6 +
+    rangeMarkers * 8 +
+    result.labSignalLines * 3 +
+    result.medicalMarkerHits * 4 +
+    (result.possibleReport ? 25 : 0)
+  );
+};
+
 const Analyze = () => {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -212,39 +284,78 @@ const Analyze = () => {
         },
       });
 
-      const firstPass = await worker.recognize(file);
-      let parsed = extractMeaningfulLabData(firstPass.data.text);
+      await worker.setParameters({ preserve_interword_spaces: "1" });
 
-      // Table-heavy reports sometimes parse better with a page-segmentation fallback pass.
-      if (parsed.markers.length < 2 || !parsed.possibleReport) {
-        const secondPass = await worker.recognize(file, {
-          tessedit_pageseg_mode: "6",
-          preserve_interword_spaces: "1",
-        });
+      let enhancedDataUrl: string | null = null;
+      try {
+        enhancedDataUrl = await createEnhancedImageDataUrl(file);
+      } catch {
+        enhancedDataUrl = null;
+      }
 
-        const fallbackParsed = extractMeaningfulLabData(secondPass.data.text);
-        const shouldUseFallback =
-          fallbackParsed.markers.length > parsed.markers.length ||
-          (!parsed.possibleReport && fallbackParsed.possibleReport);
+      const ocrPasses: Array<{
+        label: string;
+        source: File | string;
+        config?: Record<string, string>;
+      }> = [
+        { label: "default-p6", source: file, config: { tessedit_pageseg_mode: "6" } },
+        { label: "default-p11", source: file, config: { tessedit_pageseg_mode: "11" } },
+        { label: "default-p4", source: file, config: { tessedit_pageseg_mode: "4" } },
+      ];
 
-        if (shouldUseFallback) {
-          parsed = fallbackParsed;
+      if (enhancedDataUrl) {
+        ocrPasses.push(
+          { label: "enhanced-p6", source: enhancedDataUrl, config: { tessedit_pageseg_mode: "6" } },
+          { label: "enhanced-p11", source: enhancedDataUrl, config: { tessedit_pageseg_mode: "11" } },
+        );
+      }
+
+      let bestParsed: LabExtractionResult | null = null;
+      let bestScore = Number.NEGATIVE_INFINITY;
+      let bestLabel = "default";
+
+      for (let i = 0; i < ocrPasses.length; i += 1) {
+        const pass = ocrPasses[i];
+        const progressBase = Math.round((i / ocrPasses.length) * 100);
+        setOcrProgress(progressBase);
+
+        const result = await worker.recognize(pass.source, pass.config);
+        const parsed = extractMeaningfulLabData(result.data.text);
+        const score = scoreExtraction(parsed);
+
+        if (score > bestScore) {
+          bestParsed = parsed;
+          bestScore = score;
+          bestLabel = pass.label;
+        }
+
+        if (parsed.possibleReport && parsed.markers.length >= 8 && score >= 75) {
+          break;
         }
       }
 
-      if (!parsed.possibleReport) {
+      if (!bestParsed) {
+        throw new Error("No OCR output was generated.");
+      }
+
+      const shouldAccept =
+        bestParsed.possibleReport ||
+        bestParsed.markers.length >= 6 ||
+        bestParsed.medicalMarkerHits >= 2;
+
+      if (!shouldAccept) {
         setExtraction(null);
         toast({
           title: "Image may not be a blood report",
-          description: "Could not find enough lab-specific signals. Please upload a clearer blood test report image.",
+          description: "Could not detect enough lab-specific markers. Try a clearer or more tightly cropped report image.",
           variant: "destructive",
         });
         return;
       }
 
-      setExtraction(parsed);
+      setExtraction(bestParsed);
 
-      if (parsed.markers.length === 0) {
+      if (bestParsed.markers.length === 0) {
         toast({
           title: "No biomarkers detected",
           description: "Try a clearer image or higher contrast scan for better OCR quality.",
@@ -253,7 +364,7 @@ const Analyze = () => {
       } else {
         toast({
           title: "Meaningful data extracted",
-          description: `${parsed.markers.length} markers found. Sensitive lines were filtered automatically.`,
+          description: `${bestParsed.markers.length} markers found (${bestLabel}). Sensitive lines were filtered automatically.`,
         });
       }
     } catch (error) {

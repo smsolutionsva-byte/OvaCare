@@ -16,6 +16,7 @@ export type LabExtractionResult = {
   analyzedLines: number;
   cleanedText: string;
   labSignalLines: number;
+  medicalMarkerHits: number;
   possibleReport: boolean;
 };
 
@@ -60,6 +61,7 @@ const NON_MARKER_KEYWORDS = [
 
 const LAB_SIGNAL_PATTERNS = [
   /blood|serum|plasma|cbc|hemoglobin|haemoglobin|wbc|rbc|platelet/i,
+  /leucocyte|leukocyte|neutrophil|lymphocyte|monocyte|eosinophil|basophil|mcv|mch|mchc|pcv|rdw|tlc|dlc/i,
   /cholesterol|triglycerides?|hdl|ldl|glucose|sugar|hba1c|insulin/i,
   /tsh|t3|t4|lh|fsh|prolactin|androgen|testosterone|estradiol|progesterone/i,
   /creatinine|urea|alt|ast|bilirubin|albumin|globulin|crp|vitamin\s*d|b12/i,
@@ -247,7 +249,15 @@ export const extractMeaningfulLabData = (rawText: string): LabExtractionResult =
   });
 
   const rangeMarkers = markers.filter((m) => m.refMin != null && m.refMax != null).length;
-  const possibleReport = markers.length >= 2 && (labSignalLines >= 2 || rangeMarkers >= 1);
+  const medicalMarkerHits = markers.filter((m) => hasLabSignal(m.name)).length;
+  const possibleReport =
+    markers.length >= 2 &&
+    (
+      rangeMarkers >= 1 ||
+      medicalMarkerHits >= 2 ||
+      (labSignalLines >= 2 && markers.length >= 3) ||
+      (markers.length >= 6 && medicalMarkerHits >= 1)
+    );
 
   return {
     markers,
@@ -255,6 +265,7 @@ export const extractMeaningfulLabData = (rawText: string): LabExtractionResult =
     analyzedLines: safeLines.length,
     cleanedText: safeLines.join("\n"),
     labSignalLines,
+    medicalMarkerHits,
     possibleReport,
   };
 };
