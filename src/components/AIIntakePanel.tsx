@@ -1,6 +1,20 @@
 import { useMemo, useState } from "react";
 import { Brain, Loader2, Sparkles } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  PolarAngleAxis,
+  PolarGrid,
+  PolarRadiusAxis,
+  Radar,
+  RadarChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -12,11 +26,11 @@ type Provider = "groq" | "openrouter";
 
 type AIIntakeResponse = {
   summary: string;
-  likelyDrivers: string[];
-  redFlags: string[];
-  followUpQuestions: string[];
-  carePlan30Days: string[];
-  projectedRisk: number;
+  possibleContributingFactors: string[];
+  whenToSeekMedicalAttention: string[];
+  questionsToDiscussWithDoctor: string[];
+  suggested30DayActionPlan: string[];
+  medicalDisclaimer: string;
   confidence: "low" | "medium" | "high";
   providerUsed?: Provider;
 };
@@ -31,8 +45,53 @@ const providerLabelMap: Record<Provider, string> = {
   openrouter: "OvaCare Model 1.21",
 };
 
+const MEDICAL_DISCLAIMER =
+  "This summary is for informational purposes only and does not replace professional medical advice.";
+
 const truncateLabel = (label: string, max = 22) =>
   label.length > max ? `${label.slice(0, max)}...` : label;
+
+const severityMap: Record<"none" | "mild" | "moderate" | "severe", number> = {
+  none: 10,
+  mild: 40,
+  moderate: 70,
+  severe: 95,
+};
+
+const getRadarData = (data: SymptomData) => {
+  const menstrual =
+    data.periodRegularity === "regular"
+      ? 15
+      : data.periodRegularity === "irregular"
+        ? 72
+        : 95;
+
+  const androgen = Math.round(
+    (severityMap[data.acne] + severityMap[data.hairGrowth] + severityMap[data.hairLoss]) / 3,
+  );
+
+  const bmiScore = data.bmi >= 30 ? 85 : data.bmi >= 25 ? 62 : 25;
+  const metabolic = Math.min(
+    100,
+    Math.round(
+      bmiScore + (data.weightGain ? 10 : 0) + (data.darkPatches ? 10 : 0) + (data.fatigue ? 6 : 0),
+    ),
+  );
+
+  const exerciseLoad = data.exercise === "none" ? 85 : data.exercise === "light" ? 65 : data.exercise === "moderate" ? 35 : 20;
+  const dietLoad = data.diet === "balanced" ? 25 : data.diet === "mostly_processed" ? 75 : 65;
+  const lifestyle = Math.min(100, Math.round((exerciseLoad + dietLoad + (data.moodSwings ? 10 : 0)) / 2));
+
+  const family = data.familyHistory ? 76 : 25;
+
+  return [
+    { axis: "Cycle Pattern", user: menstrual, reference: 82 },
+    { axis: "Androgen Signs", user: androgen, reference: 74 },
+    { axis: "Metabolic Signs", user: metabolic, reference: 70 },
+    { axis: "Lifestyle Load", user: lifestyle, reference: 58 },
+    { axis: "Family Risk", user: family, reference: 49 },
+  ];
+};
 
 const AIIntakePanel = ({ data, result }: Props) => {
   const { toast } = useToast();
@@ -50,13 +109,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
     [result.breakdown],
   );
 
-  const compareChartData = useMemo(
-    () => [
-      { name: "Current", risk: result.score },
-      { name: "Projected", risk: analysis?.projectedRisk ?? Math.max(0, result.score - 8) },
-    ],
-    [analysis?.projectedRisk, result.score],
-  );
+  const radarData = useMemo(() => getRadarData(data), [data]);
 
   const getLocalFallback = (): AIIntakeResponse => {
     const topDrivers = [...result.breakdown]
@@ -64,29 +117,32 @@ const AIIntakePanel = ({ data, result }: Props) => {
       .slice(0, 4)
       .map((item) => item.label);
 
-    const projectedRisk = Math.max(0, result.score - Math.min(20, Math.round(result.score * 0.22)));
-
     return {
       summary:
-        "Structured intake draft generated from your questionnaire. Connect Groq or OpenRouter key in Vercel to enable deeper AI analysis.",
-      likelyDrivers: topDrivers,
-      redFlags:
+        "Your responses may be associated with a hormonal-metabolic pattern that should be evaluated by a healthcare professional. Based on your inputs, key symptoms include menstrual pattern changes and symptom clusters reflected in your risk factors.",
+      possibleContributingFactors: topDrivers.map(
+        (item) => `${item}: This pattern may be associated with hormonal imbalance and should be clinically reviewed.`,
+      ),
+      whenToSeekMedicalAttention:
         data.periodRegularity === "absent" || result.level === "high"
-          ? ["Absent or highly irregular periods", "High combined symptom burden"]
-          : ["No emergency red flag identified in this intake"],
-      followUpQuestions: [
-        "How long have menstrual irregularities persisted?",
-        "Any recent fasting glucose, insulin, or HbA1c lab results?",
-        "Any rapid weight change in the last 6 months?",
-        "Any thyroid or prolactin tests done recently?",
+          ? [
+              "Seek medical care if you experience absent periods for several months, heavy bleeding, or severe pelvic pain.",
+              "Seek early medical review if symptoms rapidly worsen or interfere with daily functioning.",
+            ]
+          : ["Seek medical care if menstrual irregularity persists or new severe symptoms appear."],
+      questionsToDiscussWithDoctor: [
+        "Which blood tests can help evaluate hormone and metabolic status (e.g., testosterone, fasting insulin, HbA1c, thyroid, prolactin)?",
+        "Would pelvic ultrasound or additional diagnostic criteria be appropriate in my case?",
+        "What management options are suitable now, and how should progress be monitored over time?",
+        "What warning signs should prompt urgent follow-up?",
       ],
-      carePlan30Days: [
-        "Track cycle dates and symptoms daily for 30 days.",
-        "Target 150 minutes/week moderate exercise.",
-        "Shift one processed meal each day to balanced whole foods.",
-        "Book gynecologist/endocrinologist consult with this summary.",
+      suggested30DayActionPlan: [
+        "Week 1: Start a daily symptom and cycle log (bleeding pattern, pain, skin changes, mood, sleep).",
+        "Week 2: Build a stable routine with regular meals, hydration, and at least 20-30 minutes activity on most days.",
+        "Week 3: Review trends in your log and note triggers such as stress, diet, and sleep variation.",
+        "Week 4: Book or attend a clinical follow-up and share your 30-day symptom record for targeted guidance.",
       ],
-      projectedRisk,
+      medicalDisclaimer: MEDICAL_DISCLAIMER,
       confidence: "medium",
     };
   };
@@ -122,6 +178,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
       }
 
       const json = (await response.json()) as AIIntakeResponse;
+      json.medicalDisclaimer = MEDICAL_DISCLAIMER;
       setAnalysis(json);
       const usedProvider = json.providerUsed || provider;
       toast({ title: "AI intake ready", description: `Generated with ${providerLabelMap[usedProvider]}.` });
@@ -195,7 +252,7 @@ const AIIntakePanel = ({ data, result }: Props) => {
         {analysis && (
           <div className="space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-primary">Summary</p>
+              <p className="text-xs font-semibold text-primary">Summary</p>
               <p className="mt-1 text-sm leading-relaxed text-foreground">{analysis.summary}</p>
             </div>
 
@@ -222,35 +279,46 @@ const AIIntakePanel = ({ data, result }: Props) => {
               </div>
 
               <div className="rounded-xl border border-border bg-card p-3">
-                <p className="mb-2 text-xs font-semibold text-muted-foreground">Current vs Projected Risk</p>
+                <p className="mb-2 text-xs font-semibold text-muted-foreground">Symptom Severity Radar Chart</p>
                 <div className="h-52 md:h-56">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={compareChartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" />
-                      <YAxis domain={[0, 100]} />
+                    <RadarChart data={radarData} margin={{ top: 10, right: 14, bottom: 10, left: 14 }}>
+                      <PolarGrid />
+                      <PolarAngleAxis dataKey="axis" tick={{ fontSize: 11 }} />
+                      <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 10 }} />
                       <Tooltip />
-                      <Bar dataKey="risk" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]} barSize={48} />
-                    </BarChart>
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Radar name="Your Symptoms" dataKey="user" stroke="hsl(var(--primary))" fill="hsl(var(--primary))" fillOpacity={0.35} />
+                      <Radar
+                        name="Reference Diagnosed Profile"
+                        dataKey="reference"
+                        stroke="hsl(var(--accent))"
+                        fill="hsl(var(--accent))"
+                        fillOpacity={0.2}
+                      />
+                    </RadarChart>
                   </ResponsiveContainer>
                 </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Reference profile is an illustrative benchmark derived from publicly available educational summaries of diagnosed PCOS/PCOD symptom patterns, and is not a diagnostic standard.
+                </p>
               </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-primary">Likely Drivers</p>
+                <p className="text-xs font-semibold text-primary">Possible Contributing Factors</p>
                 <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-                  {analysis.likelyDrivers.map((driver) => (
+                  {analysis.possibleContributingFactors.map((driver) => (
                     <li key={driver}>- {driver}</li>
                   ))}
                 </ul>
               </div>
 
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-primary">Red Flags</p>
+                <p className="text-xs font-semibold text-primary">When to Seek Medical Attention</p>
                 <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-                  {analysis.redFlags.map((flag) => (
+                  {analysis.whenToSeekMedicalAttention.map((flag) => (
                     <li key={flag}>- {flag}</li>
                   ))}
                 </ul>
@@ -259,27 +327,29 @@ const AIIntakePanel = ({ data, result }: Props) => {
 
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-primary">Doctor Questions</p>
+                <p className="text-xs font-semibold text-primary">Questions to Discuss With a Doctor</p>
                 <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-                  {analysis.followUpQuestions.map((item) => (
+                  {analysis.questionsToDiscussWithDoctor.map((item) => (
                     <li key={item}>- {item}</li>
                   ))}
                 </ul>
               </div>
 
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-primary">30-Day Care Plan</p>
+                <p className="text-xs font-semibold text-primary">Suggested 30-Day Action Plan</p>
                 <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-                  {analysis.carePlan30Days.map((item) => (
+                  {analysis.suggested30DayActionPlan.map((item) => (
                     <li key={item}>- {item}</li>
                   ))}
                 </ul>
               </div>
             </div>
 
-            <p className="text-xs text-muted-foreground">
-              Model confidence: {analysis.confidence}. This AI output is educational support only and not a diagnosis.
-            </p>
+            <div className="rounded-lg border border-border bg-card px-3 py-2">
+              <p className="text-xs font-semibold text-primary">Medical Disclaimer</p>
+              <p className="mt-1 text-xs text-muted-foreground">{analysis.medicalDisclaimer || MEDICAL_DISCLAIMER}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">Model confidence: {analysis.confidence}</p>
+            </div>
           </div>
         )}
       </CardContent>

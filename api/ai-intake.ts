@@ -10,31 +10,41 @@ type IntakePayload = {
 
 type ModelResponse = {
   summary: string;
-  likelyDrivers: string[];
-  redFlags: string[];
-  followUpQuestions: string[];
-  carePlan30Days: string[];
-  projectedRisk: number;
+  possibleContributingFactors: string[];
+  whenToSeekMedicalAttention: string[];
+  questionsToDiscussWithDoctor: string[];
+  suggested30DayActionPlan: string[];
+  medicalDisclaimer: string;
   confidence: "low" | "medium" | "high";
   providerUsed?: Provider;
 };
 
+const MEDICAL_DISCLAIMER =
+  "This summary is for informational purposes only and does not replace professional medical advice.";
+
 const SYSTEM_PROMPT = [
-  "You are an assistant helping with structured PCOS intake support.",
+  "You are an assistant helping with structured PCOS intake support for general education.",
   "Return only strict JSON, without markdown or extra text.",
-  "Never claim diagnosis. Use educational and safety-first tone.",
+  "Never claim diagnosis. Use cautious language such as 'may be associated with', 'may suggest', and 'should be evaluated by a healthcare professional'.",
+  "Tone must be calm, reassuring, and easy to read.",
+  "Summary must mention the most relevant symptoms from provided data in concise language.",
+  "Possible Contributing Factors must include short plain-language explanations.",
+  "When to Seek Medical Attention must only include urgent or early-attention scenarios, using action wording like 'Seek medical care if you experience...'.",
+  "Questions to Discuss With a Doctor must focus on diagnosis, testing, and management.",
+  "Suggested 30-Day Action Plan must be timeline-based (Week 1, Week 2, Week 3, Week 4) and include symptom tracking guidance.",
+  "Avoid fear-based language.",
   "Output JSON shape:",
   "{",
   '  "summary": "string",',
-  '  "likelyDrivers": ["string"],',
-  '  "redFlags": ["string"],',
-  '  "followUpQuestions": ["string"],',
-  '  "carePlan30Days": ["string"],',
-  '  "projectedRisk": 0-100 number,',
+  '  "possibleContributingFactors": ["string"],',
+  '  "whenToSeekMedicalAttention": ["string"],',
+  '  "questionsToDiscussWithDoctor": ["string"],',
+  '  "suggested30DayActionPlan": ["string"],',
+  `  "medicalDisclaimer": "${MEDICAL_DISCLAIMER}",`,
   '  "confidence": "low" | "medium" | "high"',
   "}",
   "Keep each list concise (3 to 6 items).",
-  "If no major red flag exists, include one calm monitoring item in redFlags.",
+  "If no major red flag exists, include one calm monitoring item in whenToSeekMedicalAttention.",
 ].join("\n");
 
 const safeArray = (input: unknown) =>
@@ -50,12 +60,15 @@ const normalizeOutput = (parsed: unknown, baselineRisk: number): ModelResponse =
   const obj = (parsed || {}) as Record<string, unknown>;
 
   return {
-    summary: String(obj.summary || "AI intake generated."),
-    likelyDrivers: safeArray(obj.likelyDrivers),
-    redFlags: safeArray(obj.redFlags),
-    followUpQuestions: safeArray(obj.followUpQuestions),
-    carePlan30Days: safeArray(obj.carePlan30Days),
-    projectedRisk: clampRisk(obj.projectedRisk, Math.max(0, baselineRisk - 10)),
+    summary: String(
+      obj.summary ||
+        "Your responses may be associated with hormonal and metabolic patterns that should be evaluated by a healthcare professional.",
+    ),
+    possibleContributingFactors: safeArray(obj.possibleContributingFactors),
+    whenToSeekMedicalAttention: safeArray(obj.whenToSeekMedicalAttention),
+    questionsToDiscussWithDoctor: safeArray(obj.questionsToDiscussWithDoctor),
+    suggested30DayActionPlan: safeArray(obj.suggested30DayActionPlan),
+    medicalDisclaimer: MEDICAL_DISCLAIMER,
     confidence: obj.confidence === "low" || obj.confidence === "high" ? obj.confidence : "medium",
   };
 };
