@@ -81,7 +81,10 @@ const ReportTracker = () => {
       const items = await getReportSnapshots(user.uid);
       setSnapshots(items);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to load report history.";
+      const rawMessage = error instanceof Error ? error.message : "Failed to load report history.";
+      const message = /requires an index|create_composite/i.test(rawMessage)
+        ? "Database index setup is pending. Redeploy the latest code or create the suggested index once in Firebase."
+        : rawMessage;
       toast({ title: "Could not load history", description: message, variant: "destructive" });
     } finally {
       setLoadingSnapshots(false);

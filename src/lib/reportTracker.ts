@@ -3,8 +3,6 @@ import {
   addDoc,
   collection,
   getDocs,
-  orderBy,
-  query,
   serverTimestamp,
 } from "firebase/firestore";
 import type { LabMarker } from "@/lib/labReportParser";
@@ -50,8 +48,7 @@ export const saveReportSnapshot = async (uid: string, payload: ReportSnapshotInp
 export const getReportSnapshots = async (uid: string) => {
   if (!uid) throw new Error("User must be signed in.");
 
-  const q = query(userReportsCollection(uid), orderBy("testDate", "asc"), orderBy("createdAt", "asc"));
-  const snapshot = await getDocs(q);
+  const snapshot = await getDocs(userReportsCollection(uid));
 
   return snapshot.docs.map((doc) => {
     const data = doc.data() as {
