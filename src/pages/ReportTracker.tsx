@@ -7,11 +7,9 @@ import {
   CalendarDays,
   FileStack,
   Loader2,
-  Save,
   Sparkles,
   TrendingDown,
   TrendingUp,
-  Upload,
 } from "lucide-react";
 import {
   Area,
@@ -28,8 +26,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -47,24 +43,14 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
-import {
-  extractMeaningfulLabData,
-  type LabExtractionResult,
-  type LabMarker,
-} from "@/lib/labReportParser";
-import {
-  getReportSnapshots,
-  saveReportSnapshot,
-  type ReportSnapshot,
-} from "@/lib/reportTracker";
+import { type LabMarker } from "@/lib/labReportParser";
+import { getReportSnapshots, type ReportSnapshot } from "@/lib/reportTracker";
 
 const formatDate = (value: string) => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 };
-
-const todayDateInput = () => new Date().toISOString().slice(0, 10);
 
 const getOutOfRangeCount = (markers: LabMarker[]) =>
   markers.filter((marker) => marker.status === "high" || marker.status === "low").length;
@@ -76,90 +62,13 @@ const deviationFromRange = (marker: LabMarker) => {
   return 0;
 };
 
-const loadImage = (file: File) =>
-  new Promise<HTMLImageElement>((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(image);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Unable to load image for OCR enhancement."));
-    };
-    image.src = url;
-  });
-
-const createEnhancedImageDataUrl = async (file: File) => {
-  const image = await loadImage(file);
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-
-  if (!ctx) throw new Error("Canvas context unavailable for OCR enhancement.");
-
-  const baseWidth = Math.max(image.width, 1400);
-  const scale = Math.min(2.5, Math.max(1.5, baseWidth / image.width));
-  const width = Math.round(image.width * scale);
-  const height = Math.round(image.height * scale);
-
-  canvas.width = width;
-  canvas.height = height;
-
-  ctx.filter = "grayscale(1) contrast(180%) brightness(115%)";
-  ctx.drawImage(image, 0, 0, width, height);
-
-  const imageData = ctx.getImageData(0, 0, width, height);
-  const data = imageData.data;
-
-  let graySum = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    graySum += data[i];
-  }
-  const grayMean = graySum / (data.length / 4);
-  const threshold = grayMean * 0.96;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const value = data[i];
-    const contrasted = (value - 128) * 1.8 + 128;
-    const leveled = contrasted > threshold ? contrasted + 24 : contrasted - 20;
-    const normalized = Math.max(0, Math.min(255, leveled));
-
-    data[i] = normalized;
-    data[i + 1] = normalized;
-    data[i + 2] = normalized;
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-  return canvas.toDataURL("image/png");
-};
-
-const scoreExtraction = (result: LabExtractionResult) => {
-  const rangeMarkers = result.markers.filter((marker) => marker.refMin != null && marker.refMax != null).length;
-  return (
-    result.markers.length * 6 +
-    rangeMarkers * 8 +
-    result.labSignalLines * 3 +
-    result.medicalMarkerHits * 4 +
-    (result.possibleReport ? 25 : 0)
-  );
-};
-
 const ReportTracker = () => {
   const { toast } = useToast();
   const { user, isConfigured } = useAuth();
 
-  const [file, setFile] = useState<File | null>(null);
-  const [testDate, setTestDate] = useState(todayDateInput());
-  const [ocrRunning, setOcrRunning] = useState(false);
-  const [ocrProgress, setOcrProgress] = useState(0);
-  const [extraction, setExtraction] = useState<LabExtractionResult | null>(null);
-  const [saving, setSaving] = useState(false);
   const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([]);
   const [loadingSnapshots, setLoadingSnapshots] = useState(false);
   const [selectedMarker, setSelectedMarker] = useState("");
-
-  const accept = ["image/jpeg", "image/png", "image/webp"];
 
   const loadSnapshots = useCallback(async () => {
     if (!user) {
@@ -183,155 +92,6 @@ const ReportTracker = () => {
     void loadSnapshots();
   }, [loadSnapshots]);
 
-  const handleFile = (nextFile: File) => {
-    if (!accept.includes(nextFile.type)) {
-      toast({ title: "Unsupported file", description: "Please upload JPG, PNG, or WEBP.", variant: "destructive" });
-      return;
-    }
-
-    if (nextFile.size > 10 * 1024 * 1024) {
-      toast({ title: "File too large", description: "Maximum file size is 10 MB.", variant: "destructive" });
-      return;
-    }
-
-    setFile(nextFile);
-    setExtraction(null);
-  };
-
-  const handleExtract = async () => {
-    if (!file) return;
-
-    let worker: Awaited<ReturnType<(typeof import("tesseract.js"))["createWorker"]>> | null = null;
-
-    try {
-      setOcrRunning(true);
-      setOcrProgress(0);
-      const { createWorker } = await import("tesseract.js");
-      worker = await createWorker("eng", 1, {
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            setOcrProgress(Math.round(m.progress * 100));
-          }
-        },
-      });
-
-      await worker.setParameters({ preserve_interword_spaces: "1" });
-
-      let enhancedDataUrl: string | null = null;
-      try {
-        enhancedDataUrl = await createEnhancedImageDataUrl(file);
-      } catch {
-        enhancedDataUrl = null;
-      }
-
-      const passes: Array<{
-        label: string;
-        source: File | string;
-        config?: Record<string, string>;
-      }> = [
-        { label: "default-p6", source: file, config: { tessedit_pageseg_mode: "6" } },
-        { label: "default-p11", source: file, config: { tessedit_pageseg_mode: "11" } },
-        { label: "default-p4", source: file, config: { tessedit_pageseg_mode: "4" } },
-      ];
-
-      if (enhancedDataUrl) {
-        passes.push(
-          { label: "enhanced-p6", source: enhancedDataUrl, config: { tessedit_pageseg_mode: "6" } },
-          { label: "enhanced-p11", source: enhancedDataUrl, config: { tessedit_pageseg_mode: "11" } },
-        );
-      }
-
-      let bestParsed: LabExtractionResult | null = null;
-      let bestScore = Number.NEGATIVE_INFINITY;
-      let bestLabel = "default";
-
-      for (let i = 0; i < passes.length; i += 1) {
-        const pass = passes[i];
-        setOcrProgress(Math.round((i / passes.length) * 100));
-
-        const result = await worker.recognize(pass.source, pass.config);
-        const parsed = extractMeaningfulLabData(result.data.text);
-        const score = scoreExtraction(parsed);
-
-        if (score > bestScore) {
-          bestParsed = parsed;
-          bestScore = score;
-          bestLabel = pass.label;
-        }
-
-        if (parsed.possibleReport && parsed.markers.length >= 8 && score >= 75) {
-          break;
-        }
-      }
-
-      if (!bestParsed) {
-        throw new Error("No OCR output was generated.");
-      }
-
-      const shouldAccept =
-        bestParsed.possibleReport ||
-        bestParsed.markers.length >= 6 ||
-        bestParsed.medicalMarkerHits >= 2;
-
-      if (!shouldAccept) {
-        setExtraction(null);
-        toast({
-          title: "Could not detect report markers",
-          description: "Try a clearer or tightly cropped report image.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      setExtraction(bestParsed);
-      toast({
-        title: "Report extracted",
-        description: `${bestParsed.markers.length} markers found (${bestLabel}).`,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Extraction failed.";
-      toast({ title: "OCR failed", description: message, variant: "destructive" });
-    } finally {
-      if (worker) {
-        await worker.terminate();
-      }
-      setOcrProgress(0);
-      setOcrRunning(false);
-    }
-  };
-
-  const handleSaveSnapshot = async () => {
-    if (!user) {
-      toast({ title: "Sign in required", description: "Please log in to save your report history.", variant: "destructive" });
-      return;
-    }
-
-    if (!extraction || extraction.markers.length === 0) {
-      toast({ title: "No extracted data", description: "Extract a report first.", variant: "destructive" });
-      return;
-    }
-
-    setSaving(true);
-    try {
-      await saveReportSnapshot(user.uid, {
-        testDate,
-        reportTitle: file?.name || `Lab report ${testDate}`,
-        source: "ocr",
-        markers: extraction.markers,
-      });
-
-      await loadSnapshots();
-      toast({ title: "Snapshot saved", description: "Your report is now part of your trend history." });
-      setExtraction(null);
-      setFile(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not save report snapshot.";
-      toast({ title: "Save failed", description: message, variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const sortedSnapshots = useMemo(
     () => [...snapshots].sort((a, b) => a.testDate.localeCompare(b.testDate)),
     [snapshots],
@@ -344,7 +104,6 @@ const ReportTracker = () => {
     () =>
       sortedSnapshots.map((snapshot) => ({
         date: formatDate(snapshot.testDate),
-        rawDate: snapshot.testDate,
         outOfRange: getOutOfRangeCount(snapshot.markers),
         total: snapshot.markers.length,
       })),
@@ -352,7 +111,7 @@ const ReportTracker = () => {
   );
 
   const markerTimelineMap = useMemo(() => {
-    const map = new Map<string, Array<{ date: string; rawDate: string; value: number; refMin: number | null; refMax: number | null }>>();
+    const map = new Map<string, Array<{ date: string; value: number; refMin: number | null; refMax: number | null }>>();
 
     for (const snapshot of sortedSnapshots) {
       for (const marker of snapshot.markers) {
@@ -360,7 +119,6 @@ const ReportTracker = () => {
         const next = map.get(key) || [];
         next.push({
           date: formatDate(snapshot.testDate),
-          rawDate: snapshot.testDate,
           value: marker.value,
           refMin: marker.refMin,
           refMax: marker.refMax,
@@ -399,7 +157,11 @@ const ReportTracker = () => {
 
   const changeSummary = useMemo(() => {
     if (!latestSnapshot || !previousSnapshot) {
-      return { improved: 0, worsened: 0, rows: [] as Array<{ name: string; delta: number; deltaPct: number; trend: "improved" | "worse" | "stable" }> };
+      return {
+        improved: 0,
+        worsened: 0,
+        rows: [] as Array<{ name: string; delta: number; deltaPct: number; trend: "improved" | "worse" | "stable" }>,
+      };
     }
 
     const prevMap = new Map(previousSnapshot.markers.map((marker) => [marker.name.toLowerCase(), marker]));
@@ -456,10 +218,10 @@ const ReportTracker = () => {
           <CardHeader>
             <CardTitle>Sign in to use Report Tracker</CardTitle>
             <CardDescription>
-              Save monthly reports, visualize trends, and compare improvements over time.
+              Report Tracker syncs data saved from Report Analyzer and shows longitudinal trends.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex gap-2">
+          <CardContent className="flex flex-wrap gap-2">
             <Button asChild className="gradient-primary border-0">
               <Link to="/login">Log in</Link>
             </Button>
@@ -478,10 +240,15 @@ const ReportTracker = () => {
         <div>
           <h1 className="font-heading text-2xl font-bold text-foreground md:text-3xl">Report Tracker</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Save each new lab report and track biomarker improvements, regressions, and long-term trends.
+            Timeline analytics for report snapshots saved from Report Analyzer.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button size="sm" className="gradient-primary border-0" asChild>
+            <Link to="/analyze">
+              Add New Snapshot From Analyzer <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
+            </Link>
+          </Button>
           <Badge variant="secondary" className="gap-1">
             <FileStack className="h-3.5 w-3.5" /> {sortedSnapshots.length} snapshots
           </Badge>
@@ -500,87 +267,10 @@ const ReportTracker = () => {
       >
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Upload New Report Snapshot</CardTitle>
-            <CardDescription>
-              Upload your latest blood report, extract marker values, then save it to your timeline.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-[1fr_180px]">
-              <div className="space-y-1">
-                <Label htmlFor="report-file">Report image</Label>
-                <Input
-                  id="report-file"
-                  type="file"
-                  accept=".jpg,.jpeg,.png,.webp"
-                  onChange={(e) => {
-                    const next = e.target.files?.[0];
-                    if (next) handleFile(next);
-                  }}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="test-date">Test date</Label>
-                <Input id="test-date" type="date" value={testDate} onChange={(e) => setTestDate(e.target.value)} />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={() => void handleExtract()} disabled={ocrRunning || !file} className="gradient-primary border-0">
-                {ocrRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                {ocrRunning ? `Extracting ${ocrProgress}%` : "Extract markers"}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={saving || !extraction || extraction.markers.length === 0}
-                onClick={() => void handleSaveSnapshot()}
-              >
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                Save snapshot
-              </Button>
-            </div>
-
-            {extraction && (
-              <div className="rounded-xl border border-border bg-muted/30 p-3">
-                <p className="text-sm font-medium text-foreground">
-                  Ready to save: {extraction.markers.length} markers extracted
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Lab signals: {extraction.labSignalLines} • PII lines filtered: {extraction.removedSensitiveLines}
-                </p>
-                <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-border bg-background">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Marker</TableHead>
-                        <TableHead>Value</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {extraction.markers.slice(0, 15).map((marker) => (
-                        <TableRow key={`${marker.name}-${marker.value}-${marker.unit}`}>
-                          <TableCell>{marker.name}</TableCell>
-                          <TableCell>
-                            {marker.value} {marker.unit}
-                          </TableCell>
-                          <TableCell>{marker.status}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle className="text-base">Progress Snapshot</CardTitle>
-            <CardDescription>Latest comparison against your previous report.</CardDescription>
+            <CardDescription>Latest comparison against your previous saved report.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
+          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border border-border bg-background p-3">
               <p className="text-xs text-muted-foreground">Reports logged</p>
               <p className="mt-1 text-2xl font-semibold text-foreground">{sortedSnapshots.length}</p>
@@ -599,6 +289,23 @@ const ReportTracker = () => {
             </div>
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Sync Flow</CardTitle>
+            <CardDescription>
+              Tracker now reads-only and auto-syncs from Analyzer saves.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <p>1. Analyze report in Report Analyzer.</p>
+            <p>2. Click Save to Tracker from Analyzer results.</p>
+            <p>3. Return here to view longitudinal trends and comparison charts.</p>
+            <Button size="sm" variant="outline" asChild>
+              <Link to="/analyze">Open Analyzer</Link>
+            </Button>
+          </CardContent>
+        </Card>
       </motion.div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
@@ -609,7 +316,7 @@ const ReportTracker = () => {
           </CardHeader>
           <CardContent>
             {trackedMarkerNames.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Save at least two report snapshots to unlock timeline charts.</p>
+              <p className="text-sm text-muted-foreground">Save at least two snapshots in Analyzer to unlock timeline charts.</p>
             ) : (
               <>
                 <div className="mb-3 max-w-sm">
@@ -646,11 +353,11 @@ const ReportTracker = () => {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Out-of-Range Trend</CardTitle>
-            <CardDescription>How many markers were outside range across each report.</CardDescription>
+            <CardDescription>How many markers were outside range across each snapshot.</CardDescription>
           </CardHeader>
           <CardContent>
             {outOfRangeTrend.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No trend yet. Save your first report snapshot.</p>
+              <p className="text-sm text-muted-foreground">No trend yet. Save your first snapshot from Analyzer.</p>
             ) : (
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
@@ -674,12 +381,12 @@ const ReportTracker = () => {
           <CardHeader>
             <CardTitle className="text-base">Latest vs Previous Report</CardTitle>
             <CardDescription>
-              Marker-level comparison to highlight potential improvement or regression patterns.
+              Marker-level change table to highlight improvement or regression patterns.
             </CardDescription>
           </CardHeader>
           <CardContent>
             {changeSummary.rows.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Upload at least two reports to enable comparison.</p>
+              <p className="text-sm text-muted-foreground">You need at least two snapshots in Analyzer for comparisons.</p>
             ) : (
               <div className="max-h-80 overflow-auto rounded-lg border border-border bg-background">
                 <Table>
@@ -714,7 +421,7 @@ const ReportTracker = () => {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Clinical Timeline</CardTitle>
-            <CardDescription>Every saved report in chronological order.</CardDescription>
+            <CardDescription>Every saved snapshot in chronological order.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {loadingSnapshots ? (
@@ -722,7 +429,7 @@ const ReportTracker = () => {
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading timeline...
               </div>
             ) : sortedSnapshots.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No saved reports yet.</p>
+              <p className="text-sm text-muted-foreground">No saved snapshots yet.</p>
             ) : (
               sortedSnapshots.map((snapshot) => (
                 <div key={snapshot.id} className="rounded-lg border border-border bg-background p-3">

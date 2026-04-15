@@ -71,6 +71,7 @@ After adding AI env vars, redeploy. On the Risk Predictor results page, users ca
 ## Report Tracker (Firebase-backed timeline)
 
 Report Tracker stores each logged blood report under the signed-in user's account in Firestore.
+Snapshots are created from the Report Analyzer page after OCR extraction (Tracker is trends-only).
 
 Collection path used:
 

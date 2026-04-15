@@ -1,6 +1,7 @@
 import { useMemo, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Upload, FileText, AlertCircle, X, Loader2, ShieldCheck, Sparkles } from "lucide-react";
+import { Upload, FileText, AlertCircle, X, Loader2, ShieldCheck, Sparkles, Save } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -26,9 +27,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/AuthContext";
 import { extractMeaningfulLabData, type LabExtractionResult, type LabMarker } from "@/lib/labReportParser";
+import { saveReportSnapshot } from "@/lib/reportTracker";
 
 type Provider = "groq" | "openrouter";
 
@@ -167,6 +171,8 @@ const scoreExtraction = (result: LabExtractionResult) => {
   );
 };
 
+const todayDateInput = () => new Date().toISOString().slice(0, 10);
+
 const Analyze = () => {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -178,7 +184,11 @@ const Analyze = () => {
   const [insightLoading, setInsightLoading] = useState(false);
   const [insight, setInsight] = useState<LabInsight | null>(null);
   const [showAllMarkers, setShowAllMarkers] = useState(false);
+  const [trackerDate, setTrackerDate] = useState(todayDateInput());
+  const [trackerTitle, setTrackerTitle] = useState("Report Snapshot");
+  const [trackerSaving, setTrackerSaving] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const accept = ["image/jpeg", "image/png", "image/webp"];
 
@@ -257,6 +267,8 @@ const Analyze = () => {
     setExtraction(null);
     setInsight(null);
     setShowAllMarkers(false);
+    setTrackerDate(todayDateInput());
+    setTrackerTitle(f.name);
   }, [toast]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -433,6 +445,37 @@ const Analyze = () => {
     setInsight(null);
     setShowAllMarkers(false);
     setNote("");
+    setTrackerDate(todayDateInput());
+    setTrackerTitle("Report Snapshot");
+  };
+
+  const handleSaveToTracker = async () => {
+    if (!user) {
+      toast({ title: "Sign in required", description: "Please log in to save this report to your tracker.", variant: "destructive" });
+      return;
+    }
+
+    if (!extraction || extraction.markers.length === 0) {
+      toast({ title: "No extracted data", description: "Extract marker data first.", variant: "destructive" });
+      return;
+    }
+
+    setTrackerSaving(true);
+    try {
+      await saveReportSnapshot(user.uid, {
+        testDate: trackerDate,
+        reportTitle: trackerTitle.trim() || file?.name || "Report Snapshot",
+        source: "ocr",
+        markers: extraction.markers,
+      });
+
+      toast({ title: "Saved to tracker", description: "Your report snapshot has been added to Report Tracker." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save report snapshot.";
+      toast({ title: "Save failed", description: message, variant: "destructive" });
+    } finally {
+      setTrackerSaving(false);
+    }
   };
 
   return (
@@ -628,6 +671,62 @@ const Analyze = () => {
                           {showAllMarkers ? "Show fewer markers" : `Show all ${extraction.markers.length} markers`}
                         </Button>
                       </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Add Snapshot To Report Tracker</CardTitle>
+                    <CardDescription>
+                      Save this extracted report to your personal timeline for month-by-month trend tracking.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {!user ? (
+                      <div className="rounded-xl border border-border bg-secondary/40 p-4 text-sm text-muted-foreground">
+                        Log in to save this analysis to your tracker.
+                        <div className="mt-2 flex gap-2">
+                          <Button size="sm" asChild>
+                            <Link to="/login">Log in</Link>
+                          </Button>
+                          <Button size="sm" variant="outline" asChild>
+                            <Link to="/signup">Sign up</Link>
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid gap-3 md:grid-cols-[1fr_180px_auto] md:items-end">
+                          <div className="space-y-1">
+                            <Label htmlFor="snapshot-title">Snapshot title</Label>
+                            <Input
+                              id="snapshot-title"
+                              value={trackerTitle}
+                              onChange={(e) => setTrackerTitle(e.target.value)}
+                              placeholder="CBC April 2026"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label htmlFor="snapshot-date">Test date</Label>
+                            <Input
+                              id="snapshot-date"
+                              type="date"
+                              value={trackerDate}
+                              onChange={(e) => setTrackerDate(e.target.value)}
+                            />
+                          </div>
+                          <Button onClick={() => void handleSaveToTracker()} disabled={trackerSaving} className="gradient-primary border-0">
+                            {trackerSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                            Save to Tracker
+                          </Button>
+                        </div>
+                        <div>
+                          <Button variant="ghost" size="sm" asChild>
+                            <Link to="/tracker">Open Report Tracker</Link>
+                          </Button>
+                        </div>
+                      </>
                     )}
                   </CardContent>
                 </Card>
