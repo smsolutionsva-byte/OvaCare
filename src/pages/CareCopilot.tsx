@@ -649,6 +649,30 @@ const CareCopilot = () => {
       return;
     }
 
+    try {
+      if ("permissions" in navigator && typeof navigator.permissions?.query === "function") {
+        const permissionStatus = await navigator.permissions.query({ name: "geolocation" as PermissionName });
+
+        if (permissionStatus.state === "denied") {
+          toast({
+            title: "Location permission blocked",
+            description: "Enable location access in browser settings, then retry.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        if (permissionStatus.state === "prompt") {
+          toast({
+            title: "Allow location access",
+            description: "Your browser may show a permission prompt. Please allow it.",
+          });
+        }
+      }
+    } catch {
+      // If permission API is unavailable, geolocation prompt flow still works.
+    }
+
     setLocationBusy(true);
     try {
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
@@ -1297,25 +1321,27 @@ const CareCopilot = () => {
 
               {mapError && <p className="text-xs text-destructive">{mapError}</p>}
 
-              <div className="h-64 overflow-hidden rounded-xl border border-border bg-muted/20">
+              <div className="rounded-xl border border-border bg-muted/20 p-4">
                 {searchingClinics ? (
-                  <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+                  <div className="flex min-h-40 flex-col items-center justify-center gap-2 px-2 text-center">
                     <Loader2 className="h-5 w-5 animate-spin text-primary" />
                     <p className="text-sm font-medium text-foreground">Looking through clinics and checking around...</p>
                     <p className="text-xs text-muted-foreground">{scoutSteps[scoutStepIndex]}</p>
                   </div>
                 ) : !clinicScout ? (
-                  <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+                  <div className="flex min-h-40 items-center justify-center px-2 text-center text-sm text-muted-foreground">
                     Search to start Clinic Scout and open map analysis.
                   </div>
                 ) : (
-                  <iframe
-                    title="Clinic map results"
-                    src={clinicScout.mapEmbedUrl}
-                    className="h-full w-full"
-                    loading="lazy"
-                    referrerPolicy="no-referrer-when-downgrade"
-                  />
+                  <div className="flex min-h-40 flex-col items-center justify-center gap-3 text-center">
+                    <p className="text-sm font-medium text-foreground">Live map is shown in the Clinic Scout popup.</p>
+                    <p className="text-xs text-muted-foreground">
+                      Keeping one map surface only to avoid duplicates.
+                    </p>
+                    <Button size="sm" variant="outline" onClick={() => setClinicScoutOpen(true)}>
+                      Open Clinic Scout Map
+                    </Button>
+                  </div>
                 )}
               </div>
 
