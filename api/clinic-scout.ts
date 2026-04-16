@@ -47,6 +47,7 @@ type ScrapeOptions = {
     latitude: number;
     longitude: number;
   };
+  budgetMs?: number;
 };
 
 export const config = {
@@ -169,6 +170,8 @@ const pickAddressFromLines = (textLines: string[]) => {
   return addressHint || textLines[2] || textLines[1] || "Address not clearly listed in map snippet.";
 };
 
+const remainingMs = (deadline: number, reserve = 0) => Math.max(400, deadline - Date.now() - reserve);
+
 const launchMapsBrowser = async () => {
   const playwright = await import("playwright-core");
   const chromiumModule = await import("@sparticuz/chromium");
@@ -210,6 +213,10 @@ const scrapeGoogleMapsFeed = async (
   let browser: any = null;
 
   try {
+    const requestedBudget = Number(options?.budgetMs ?? process.env.CLINIC_SCOUT_SCRAPE_BUDGET_MS ?? 8500);
+    const budgetMs = clamp(Number.isFinite(requestedBudget) ? requestedBudget : 8500, 3000, 15000);
+    const deadline = Date.now() + budgetMs;
+
     browser = await launchMapsBrowser();
 
     const context = await browser.newContext({
@@ -225,11 +232,20 @@ const scrapeGoogleMapsFeed = async (
     }
 
     const page = await context.newPage();
+
+    await page.route("**/*", (route) => {
+      const kind = route.request().resourceType();
+      if (kind === "image" || kind === "media" || kind === "font") {
+        return route.abort();
+      }
+      return route.continue();
+    }).catch(() => undefined);
+
     const encodedQuery = searchQuery.replace(/\s+/g, "+");
 
     await page.goto(`https://www.google.com/maps/search/${encodedQuery}`, {
       waitUntil: "domcontentloaded",
-      timeout: 30000,
+      timeout: Math.min(9000, remainingMs(deadline, 800)),
     });
 
     const popupSelectors = [
@@ -244,9 +260,9 @@ const scrapeGoogleMapsFeed = async (
     for (const selector of popupSelectors) {
       try {
         const button = page.locator(selector).first();
-        if (await button.isVisible({ timeout: 1500 })) {
-          await button.click({ timeout: 1500 });
-          await delay(700);
+        if (await button.isVisible({ timeout: 900 })) {
+          await button.click({ timeout: 900 });
+          await delay(350);
           break;
         }
       } catch {
@@ -255,10 +271,10 @@ const scrapeGoogleMapsFeed = async (
     }
 
     try {
-      await page.waitForSelector("div[role='feed']", { timeout: 12000 });
+      await page.waitForSelector("div[role='feed']", { timeout: Math.min(4200, remainingMs(deadline, 500)) });
     } catch {
       await page.mouse.wheel(0, 320);
-      await page.waitForSelector("div[role='feed']", { timeout: 7000 });
+      await page.waitForSelector("div[role='feed']", { timeout: Math.min(2600, remainingMs(deadline, 300)) });
     }
 
     let scrollActive = true;
@@ -275,11 +291,11 @@ const scrapeGoogleMapsFeed = async (
           )
           .catch(() => undefined);
 
-        await delay(400 + Math.floor(Math.random() * 701));
+        await delay(250 + Math.floor(Math.random() * 350));
       }
     })();
 
-    const timeoutAt = Date.now() + 20000;
+    const timeoutAt = Math.min(deadline, Date.now() + 6000);
     let cards: Array<{ name: string; href: string; textLines: string[] }> = [];
 
     while (Date.now() < timeoutAt) {
@@ -309,7 +325,8 @@ const scrapeGoogleMapsFeed = async (
 
       const loaded = cards.filter((card) => card.name).length;
       if (loaded >= maxResults) break;
-      await delay(800);
+      if (remainingMs(timeoutAt) < 500) break;
+      await delay(280);
     }
 
     scrollActive = false;
@@ -347,6 +364,10 @@ const scrapeGoogleMapsFeed = async (
       throw new Error(
         "Serverless Chromium is not available at runtime. Install dependencies and redeploy Vercel.",
       );
+    }
+
+    if (/timeout|timed out|navigation timeout|waitforselector/i.test(message)) {
+      throw new Error("Google Maps scrape timed out in serverless runtime. Retry once or try city name text.");
     }
 
     throw new Error(`Google Maps scrape failed: ${message}`);
@@ -445,20 +466,30 @@ export default async function handler(req: any, res: any) {
 
     const mapQuery = `${specialtyTerms[specialty]} near ${location}`;
     let scraped: ScrapedMapPlace[] = [];
+    let scrapeNote: string | null = null;
 
     try {
-      scraped = await scrapeGoogleMapsFeed(mapQuery, 10, {
+      scraped = await scrapeGoogleMapsFeed(mapQuery, 6, {
         geolocation: coordinates || undefined,
+        budgetMs: 8500,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not initialize map scraping.";
-      return json(res, 502, { error: message });
+      scrapeNote = message;
     }
 
     if (!scraped.length) {
-      return json(res, 502, {
-        error:
-          "Could not load map cards from Google Maps. If consent/location prompts appear, allow them and retry.",
+      return json(res, 200, {
+        query: mapQuery,
+        centerLabel: location,
+        mapEmbedUrl: `https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`,
+        sourceMode: "google-maps-live",
+        weightProfile,
+        items: [],
+        recommendation: null,
+        scrapeNote:
+          scrapeNote ||
+          "Map cards were not ready fast enough on serverless. Retry once, or search with city text instead of GPS coordinates.",
       });
     }
 
@@ -476,6 +507,7 @@ export default async function handler(req: any, res: any) {
       sourceMode: "google-maps-live",
       weightProfile,
       items: ranked,
+      scrapeNote,
       recommendation: best
         ? {
             bestClinicId: best.id,

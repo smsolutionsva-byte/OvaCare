@@ -65,6 +65,7 @@ import {
   type CareMessage,
 } from "@/lib/careCopilot";
 import {
+  reverseGeocodeLocation,
   specialtyLabelMap,
   type ClinicSpecialty,
 } from "@/lib/clinicFinder";
@@ -132,6 +133,7 @@ type ClinicScoutResult = {
   query: string;
   centerLabel: string;
   mapEmbedUrl: string;
+  scrapeNote?: string | null;
   weightProfile: {
     distance: number;
     reviews: number;
@@ -685,12 +687,24 @@ const CareCopilot = () => {
 
       const { latitude, longitude } = position.coords;
       const coordinatesLabel = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
-      setLocation(coordinatesLabel);
+
+      let resolvedLocationLabel = coordinatesLabel;
+      try {
+        const reverseResult = await reverseGeocodeLocation(latitude, longitude);
+        resolvedLocationLabel = reverseResult.label || coordinatesLabel;
+      } catch {
+        // Fallback to coordinates if reverse lookup fails.
+      }
+
+      setLocation(resolvedLocationLabel);
       toast({
         title: "Location detected",
-        description: "Using GPS coordinates for map and specialist search.",
+        description:
+          resolvedLocationLabel === coordinatesLabel
+            ? "Using detected coordinates for map and specialist search."
+            : `Using ${resolvedLocationLabel} for map and specialist search.`,
       });
-      return coordinatesLabel;
+      return resolvedLocationLabel;
     } catch (error) {
       const message =
         error && typeof error === "object" && "message" in error
@@ -767,9 +781,16 @@ const CareCopilot = () => {
       if (!payload.items.length) {
         toast({
           title: "No clinics found",
-          description: "Try a nearby location or broader specialist type.",
+          description: payload.scrapeNote || "Try a nearby location or broader specialist type.",
         });
         return;
+      }
+
+      if (payload.scrapeNote) {
+        toast({
+          title: "Scout note",
+          description: payload.scrapeNote,
+        });
       }
 
       toast({
