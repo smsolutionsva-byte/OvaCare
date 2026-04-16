@@ -6,6 +6,19 @@ export type ClinicSearchParams = {
   limit?: number;
 };
 
+export type WebClinicSearchLinks = {
+  query: string;
+  googleMapsSearchUrl: string;
+  googleMapsEmbedUrl: string;
+  yelpSearchUrl: string;
+  webSearchUrl: string;
+};
+
+export type ReverseGeocodeResult = {
+  label: string;
+  coordinatesLabel: string;
+};
+
 export type ClinicResult = {
   id: string;
   name: string;
@@ -42,6 +55,22 @@ export const specialtyLabelMap: Record<ClinicSpecialty, string> = {
   fertility: "Fertility specialist",
   dermatologist: "Dermatologist",
   nutrition: "Nutrition specialist",
+};
+
+export const buildWebClinicSearchLinks = ({ location, specialty }: { location: string; specialty: ClinicSpecialty }): WebClinicSearchLinks => {
+  const safeLocation = location.trim();
+  const specialtyLabel = specialtyLabelMap[specialty];
+  const query = `${specialtyLabel} near ${safeLocation}`;
+
+  return {
+    query,
+    googleMapsSearchUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`,
+    googleMapsEmbedUrl: `https://www.google.com/maps?q=${encodeURIComponent(query)}&output=embed`,
+    yelpSearchUrl: `https://www.yelp.com/search?find_desc=${encodeURIComponent(specialtyLabel)}&find_loc=${encodeURIComponent(
+      safeLocation,
+    )}`,
+    webSearchUrl: `https://www.google.com/search?q=${encodeURIComponent(`${query} reviews`)}`,
+  };
 };
 
 const toAddress = (displayName: string) => {
@@ -91,18 +120,19 @@ export const findNearbyClinics = async ({ location, specialty, limit = 8 }: Clin
     throw new Error("Enter a location to search nearby specialists.");
   }
 
-  const query = `${specialtyTerms[specialty]} near ${location.trim()}`;
-  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=20&addressdetails=1&q=${encodeURIComponent(query)}`;
+  const apiUrl = `/api/clinic-locator?mode=search&specialty=${encodeURIComponent(specialty)}&location=${encodeURIComponent(
+    location.trim(),
+  )}&limit=20`;
 
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl, {
     headers: {
       Accept: "application/json",
-      "Accept-Language": "en",
     },
   });
 
   if (!response.ok) {
-    throw new Error("Location service is unavailable right now. Please retry.");
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error || "Location service is unavailable right now. Please retry.");
   }
 
   const payload = (await response.json()) as NominatimResult[];
@@ -125,4 +155,30 @@ export const findNearbyClinics = async ({ location, specialty, limit = 8 }: Clin
     .map(({ score, ...rest }) => rest);
 
   return mapped;
+};
+
+export const reverseGeocodeLocation = async (latitude: number, longitude: number): Promise<ReverseGeocodeResult> => {
+  const coordinatesLabel = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+  const apiUrl = `/api/clinic-locator?mode=reverse&lat=${encodeURIComponent(String(latitude))}&lon=${encodeURIComponent(
+    String(longitude),
+  )}`;
+
+  const response = await fetch(apiUrl, {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    return { label: coordinatesLabel, coordinatesLabel };
+  }
+
+  const payload = (await response.json()) as {
+    label?: string;
+  };
+
+  return {
+    label: payload.label || coordinatesLabel,
+    coordinatesLabel,
+  };
 };

@@ -63,12 +63,11 @@ import {
   type CareMessage,
 } from "@/lib/careCopilot";
 import {
-  findNearbyClinics,
+  buildWebClinicSearchLinks,
   specialtyLabelMap,
-  type ClinicResult,
   type ClinicSpecialty,
+  type WebClinicSearchLinks,
 } from "@/lib/clinicFinder";
-import { loadLeaflet } from "@/lib/leafletLoader";
 import { getReportSnapshots, type ReportSnapshot } from "@/lib/reportTracker";
 import { simulateWhatIfPlan } from "@/lib/whatIfSimulator";
 
@@ -116,14 +115,6 @@ const makeLocalId = () => {
 
   return `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
-
-const escapeHtml = (value: string) =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 
 const formatMessageTime = (iso: string) => {
   const parsed = new Date(iso);
@@ -235,13 +226,11 @@ const CareCopilot = () => {
 
   const [specialty, setSpecialty] = useState<ClinicSpecialty>("gynecologist");
   const [location, setLocation] = useState("");
-  const [clinics, setClinics] = useState<ClinicResult[]>([]);
+  const [webSearchLinks, setWebSearchLinks] = useState<WebClinicSearchLinks | null>(null);
   const [searchingClinics, setSearchingClinics] = useState(false);
   const [locationBusy, setLocationBusy] = useState(false);
   const [mapError, setMapError] = useState("");
 
-  const mapRootRef = useRef<HTMLDivElement | null>(null);
-  const mapInstanceRef = useRef<any>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
 
   const trackerContext = useMemo(() => buildTrackerContext(snapshots), [snapshots]);
@@ -595,35 +584,29 @@ const CareCopilot = () => {
       });
 
       const { latitude, longitude } = position.coords;
-      const reverseUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`;
-      const reverseResponse = await fetch(reverseUrl, { headers: { Accept: "application/json" } });
+      const coordinatesLabel = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+      setLocation(coordinatesLabel);
+      toast({
+        title: "Location detected",
+        description: "Using GPS coordinates for map and specialist search.",
+      });
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message?: unknown }).message || "")
+          : "";
 
-      if (!reverseResponse.ok) {
-        setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-        return;
-      }
+      const denied = /denied|permission/i.test(message);
+      const timeout = /timeout/i.test(message);
 
-      const reverseJson = (await reverseResponse.json()) as {
-        address?: {
-          city?: string;
-          town?: string;
-          village?: string;
-          state?: string;
-          country?: string;
-        };
-      };
-
-      const label = [
-        reverseJson.address?.city || reverseJson.address?.town || reverseJson.address?.village || "",
-        reverseJson.address?.state || "",
-        reverseJson.address?.country || "",
-      ]
-        .filter(Boolean)
-        .join(", ");
-
-      setLocation(label || `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-    } catch {
-      toast({ title: "Location unavailable", description: "Could not fetch current location. Enter city manually." });
+      toast({
+        title: "Location unavailable",
+        description: denied
+          ? "Location permission was denied by browser/device settings."
+          : timeout
+            ? "Location request timed out. Try again where GPS signal is better."
+            : "Could not fetch current location. Enter city manually.",
+      });
     } finally {
       setLocationBusy(false);
     }
@@ -641,20 +624,26 @@ const CareCopilot = () => {
     }
 
     try {
-      const results = await findNearbyClinics({ location, specialty: effectiveSpecialty, limit: 8 });
-      setClinics(results);
-
-      if (results.length === 0) {
+      if (!location.trim()) {
+        setMapError("Enter a city or use current location before searching.");
         toast({
-          title: "No results found",
-          description: "Try a nearby city or a broader specialty.",
+          title: "Location required",
+          description: "Enter a location to search doctors and clinics.",
+          variant: "destructive",
         });
-      } else {
-        toast({
-          title: "Clinics loaded",
-          description: `${results.length} places found for ${specialtyLabelMap[effectiveSpecialty]}.`,
-        });
+        return;
       }
+
+      const links = buildWebClinicSearchLinks({
+        location,
+        specialty: effectiveSpecialty,
+      });
+
+      setWebSearchLinks(links);
+      toast({
+        title: "Search ready",
+        description: `Showing ${specialtyLabelMap[effectiveSpecialty]} results in Google Maps. Open Yelp/web links for reviews.`,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Clinic search failed.";
       setMapError(message);
@@ -663,75 +652,6 @@ const CareCopilot = () => {
       setSearchingClinics(false);
     }
   };
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const mountMap = async () => {
-      if (!mapRootRef.current || clinics.length === 0) {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.remove();
-          mapInstanceRef.current = null;
-        }
-        return;
-      }
-
-      try {
-        const L = await loadLeaflet();
-        if (cancelled || !mapRootRef.current) return;
-
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.remove();
-          mapInstanceRef.current = null;
-        }
-
-        const map = L.map(mapRootRef.current);
-        mapInstanceRef.current = map;
-
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        }).addTo(map);
-
-        const points: Array<[number, number]> = [];
-
-        clinics.forEach((clinic) => {
-          points.push([clinic.lat, clinic.lon]);
-
-          const popupHtml = `
-            <div style="max-width: 220px; font-size: 12px; line-height: 1.35;">
-              <strong>${escapeHtml(clinic.name)}</strong><br/>
-              <span>${escapeHtml(clinic.address)}</span>
-            </div>
-          `;
-
-          L.marker([clinic.lat, clinic.lon]).addTo(map).bindPopup(popupHtml);
-        });
-
-        if (points.length === 1) {
-          map.setView(points[0], 13);
-        } else {
-          const bounds = L.latLngBounds(points);
-          map.fitBounds(bounds, { padding: [20, 20] });
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Map failed to load.";
-        setMapError(message);
-      }
-    };
-
-    void mountMap();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [clinics]);
-
-  useEffect(() => () => {
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
-    }
-  }, []);
 
   const copyVisitBrief = async () => {
     const lines = [
@@ -1150,50 +1070,80 @@ const CareCopilot = () => {
               {mapError && <p className="text-xs text-destructive">{mapError}</p>}
 
               <div className="h-64 overflow-hidden rounded-xl border border-border bg-muted/20">
-                {clinics.length === 0 ? (
+                {!webSearchLinks ? (
                   <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
-                    Search a city and specialty to render clinics on map.
+                    Search to preview Google Maps results here.
                   </div>
                 ) : (
-                  <div ref={mapRootRef} className="h-full w-full" />
+                  <iframe
+                    title="Clinic map results"
+                    src={webSearchLinks.googleMapsEmbedUrl}
+                    className="h-full w-full"
+                    loading="lazy"
+                    referrerPolicy="no-referrer-when-downgrade"
+                  />
                 )}
               </div>
 
-              <div className="max-h-64 space-y-2 overflow-auto pr-1">
-                {clinics.map((clinic) => (
-                  <div key={clinic.id} className="rounded-lg border border-border bg-background p-3">
-                    <p className="text-sm font-medium text-foreground">{clinic.name}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{clinic.address}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">Type: {clinic.type}</p>
-                    <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                      {clinic.whyGood.map((reason) => (
-                        <li key={reason}>- {reason}</li>
-                      ))}
-                    </ul>
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      <a
-                        href={clinic.sourceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-medium text-primary underline-offset-2 hover:underline"
-                      >
-                        Open in map source
-                      </a>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          void sendMessage(
-                            `I found this ${specialtyLabelMap[specialty]} option: ${clinic.name} at ${clinic.address}. Help me ask smart screening questions before booking.`,
-                          )
-                        }
-                        disabled={sending}
-                      >
-                        <Bot className="mr-1 h-3.5 w-3.5" /> Ask Copilot
-                      </Button>
-                    </div>
+              <div className="space-y-3 rounded-lg border border-border bg-background p-3">
+                <p className="text-xs text-muted-foreground">
+                  Open review-driven sources directly. Google Maps shows ratings/reviews, Yelp shows listing reviews where available.
+                </p>
+
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!webSearchLinks}
+                    onClick={() => {
+                      if (!webSearchLinks) return;
+                      window.open(webSearchLinks.googleMapsSearchUrl, "_blank", "noopener,noreferrer");
+                    }}
+                  >
+                    Open Google Maps
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!webSearchLinks}
+                    onClick={() => {
+                      if (!webSearchLinks) return;
+                      window.open(webSearchLinks.yelpSearchUrl, "_blank", "noopener,noreferrer");
+                    }}
+                  >
+                    Open Yelp
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!webSearchLinks}
+                    onClick={() => {
+                      if (!webSearchLinks) return;
+                      window.open(webSearchLinks.webSearchUrl, "_blank", "noopener,noreferrer");
+                    }}
+                  >
+                    Open Web Results
+                  </Button>
+                </div>
+
+                {webSearchLinks && (
+                  <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                    Query: <span className="font-medium text-foreground">{webSearchLinks.query}</span>
                   </div>
-                ))}
+                )}
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    void sendMessage(
+                      `I searched for ${specialtyLabelMap[specialty]} near ${location}. Help me shortlist top clinics from Google/Yelp results based on ratings, review quality, distance, and follow-up support.`,
+                    )
+                  }
+                  disabled={sending || !webSearchLinks}
+                >
+                  <Bot className="mr-1 h-3.5 w-3.5" /> Help me choose from reviews
+                </Button>
               </div>
             </TabsContent>
 
