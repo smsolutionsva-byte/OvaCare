@@ -87,6 +87,118 @@ const buildCanonicalMarkerMap = (markers: LabMarker[]) => {
   return map;
 };
 
+const toTimestamp = (value: string) => {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const looseTokenOverlap = (target: string, candidate: string) => {
+  const targetTokens = target.split(" ").filter((token) => token.length > 1);
+  const candidateTokens = candidate.split(" ").filter((token) => token.length > 1);
+
+  if (targetTokens.length === 0 || candidateTokens.length === 0) return 0;
+
+  const targetSet = new Set(targetTokens);
+  const candidateSet = new Set(candidateTokens);
+
+  let intersection = 0;
+  for (const token of targetSet) {
+    if (candidateSet.has(token)) intersection += 1;
+  }
+
+  return intersection / Math.min(targetSet.size, candidateSet.size);
+};
+
+const findLooseMarkerKey = (targetKey: string, existingKeys: string[]) => {
+  let bestKey: string | null = null;
+  let bestScore = 0;
+
+  for (const candidate of existingKeys) {
+    const overlap = looseTokenOverlap(targetKey, candidate);
+    const containment = targetKey.includes(candidate) || candidate.includes(targetKey) ? 0.85 : 0;
+    const score = Math.max(overlap, containment);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = candidate;
+    }
+  }
+
+  return bestScore >= 0.55 ? bestKey : null;
+};
+
+type ComparisonSummary = {
+  improved: number;
+  worsened: number;
+  stable: number;
+  matched: number;
+  rows: Array<{ name: string; delta: number; deltaPct: number; trend: "improved" | "worse" | "stable" }>;
+};
+
+const compareSnapshots = (latestSnapshot: ReportSnapshot | null, previousSnapshot: ReportSnapshot | null): ComparisonSummary => {
+  if (!latestSnapshot || !previousSnapshot) {
+    return {
+      improved: 0,
+      worsened: 0,
+      stable: 0,
+      matched: 0,
+      rows: [],
+    };
+  }
+
+  const latestMap = buildCanonicalMarkerMap(latestSnapshot.markers);
+  const prevMap = buildCanonicalMarkerMap(previousSnapshot.markers);
+  const previousKeys = [...prevMap.keys()];
+
+  const rows = [...latestMap.entries()]
+    .map(([latestKey, latestEntry]) => {
+      const resolvedPrevKey = prevMap.has(latestKey)
+        ? latestKey
+        : findClosestMarkerKey(latestKey, previousKeys) || findLooseMarkerKey(latestKey, previousKeys);
+
+      if (!resolvedPrevKey) return null;
+
+      const previousEntry = prevMap.get(resolvedPrevKey);
+      if (!previousEntry || previousEntry.markers.length === 0 || latestEntry.markers.length === 0) return null;
+
+      const current = latestEntry.markers[0];
+
+      // Prefer candidate with closest numeric value when multiple rows map to same canonical key.
+      const previous = previousEntry.markers.reduce((best, candidate) => {
+        const bestDelta = Math.abs(best.value - current.value);
+        const candidateDelta = Math.abs(candidate.value - current.value);
+        return candidateDelta < bestDelta ? candidate : best;
+      });
+
+      const delta = current.value - previous.value;
+      const deltaPct = previous.value !== 0 ? (delta / previous.value) * 100 : 0;
+      const previousDeviation = deviationFromRange(previous);
+      const currentDeviation = deviationFromRange(current);
+      const improvementScore = previousDeviation - currentDeviation;
+
+      let trend: "improved" | "worse" | "stable" = "stable";
+      if (Math.abs(improvementScore) > 0.0001) {
+        trend = improvementScore > 0 ? "improved" : "worse";
+      }
+
+      return {
+        name: latestEntry.label,
+        delta,
+        deltaPct,
+        trend,
+      };
+    })
+    .filter((item): item is { name: string; delta: number; deltaPct: number; trend: "improved" | "worse" | "stable" } => Boolean(item));
+
+  return {
+    improved: rows.filter((row) => row.trend === "improved").length,
+    worsened: rows.filter((row) => row.trend === "worse").length,
+    stable: rows.filter((row) => row.trend === "stable").length,
+    matched: rows.length,
+    rows: rows.sort((a, b) => Math.abs(b.deltaPct) - Math.abs(a.deltaPct)),
+  };
+};
+
 const ReportTracker = () => {
   const { toast } = useToast();
   const { user, isConfigured } = useAuth();
@@ -94,6 +206,7 @@ const ReportTracker = () => {
   const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([]);
   const [loadingSnapshots, setLoadingSnapshots] = useState(false);
   const [selectedMarker, setSelectedMarker] = useState("");
+  const [selectedComparisonPair, setSelectedComparisonPair] = useState("");
 
   const loadSnapshots = useCallback(async () => {
     if (!user) {
@@ -121,12 +234,56 @@ const ReportTracker = () => {
   }, [loadSnapshots]);
 
   const sortedSnapshots = useMemo(
-    () => [...snapshots].sort((a, b) => a.testDate.localeCompare(b.testDate)),
+    () =>
+      [...snapshots].sort((a, b) => {
+        const byTestDate = a.testDate.localeCompare(b.testDate);
+        if (byTestDate !== 0) return byTestDate;
+
+        const byCreatedAt = toTimestamp(a.createdAt) - toTimestamp(b.createdAt);
+        if (byCreatedAt !== 0) return byCreatedAt;
+
+        return a.id.localeCompare(b.id);
+      }),
     [snapshots],
   );
 
-  const latestSnapshot = sortedSnapshots.at(-1) ?? null;
-  const previousSnapshot = sortedSnapshots.length > 1 ? sortedSnapshots[sortedSnapshots.length - 2] : null;
+  const comparisonPairs = useMemo(
+    () =>
+      sortedSnapshots.slice(1).map((current, index) => {
+        const previous = sortedSnapshots[index];
+        const pairId = `${previous.id}__${current.id}`;
+
+        return {
+          id: pairId,
+          previous,
+          current,
+          label: `${formatDate(previous.testDate)} -> ${formatDate(current.testDate)}`,
+          summary: compareSnapshots(current, previous),
+        };
+      }),
+    [sortedSnapshots],
+  );
+
+  useEffect(() => {
+    const defaultPairId = comparisonPairs.at(-1)?.id || "";
+
+    if (!defaultPairId) {
+      if (selectedComparisonPair) setSelectedComparisonPair("");
+      return;
+    }
+
+    if (!selectedComparisonPair || !comparisonPairs.some((pair) => pair.id === selectedComparisonPair)) {
+      setSelectedComparisonPair(defaultPairId);
+    }
+  }, [comparisonPairs, selectedComparisonPair]);
+
+  const activeComparison = useMemo(
+    () => comparisonPairs.find((pair) => pair.id === selectedComparisonPair) || comparisonPairs.at(-1) || null,
+    [comparisonPairs, selectedComparisonPair],
+  );
+
+  const latestSnapshot = activeComparison?.current || sortedSnapshots.at(-1) || null;
+  const previousSnapshot = activeComparison?.previous || (sortedSnapshots.length > 1 ? sortedSnapshots[sortedSnapshots.length - 2] : null);
 
   const outOfRangeTrend = useMemo(
     () =>
@@ -216,64 +373,10 @@ const ReportTracker = () => {
     [selectedMarkerSeries],
   );
 
-  const changeSummary = useMemo(() => {
-    if (!latestSnapshot || !previousSnapshot) {
-      return {
-        improved: 0,
-        worsened: 0,
-        rows: [] as Array<{ name: string; delta: number; deltaPct: number; trend: "improved" | "worse" | "stable" }>,
-      };
-    }
-
-    const latestMap = buildCanonicalMarkerMap(latestSnapshot.markers);
-    const prevMap = buildCanonicalMarkerMap(previousSnapshot.markers);
-
-    const rows = [...latestMap.entries()]
-      .map(([latestKey, latestEntry]) => {
-        const resolvedPrevKey = prevMap.has(latestKey)
-          ? latestKey
-          : findClosestMarkerKey(latestKey, [...prevMap.keys()]);
-
-        if (!resolvedPrevKey) return null;
-
-        const previousEntry = prevMap.get(resolvedPrevKey);
-        if (!previousEntry || previousEntry.markers.length === 0 || latestEntry.markers.length === 0) return null;
-
-        const current = latestEntry.markers[0];
-
-        // Prefer candidate with closest numeric value when multiple rows map to same canonical key.
-        const previous = previousEntry.markers.reduce((best, candidate) => {
-          const bestDelta = Math.abs(best.value - current.value);
-          const candidateDelta = Math.abs(candidate.value - current.value);
-          return candidateDelta < bestDelta ? candidate : best;
-        });
-
-        const delta = current.value - previous.value;
-        const deltaPct = previous.value !== 0 ? (delta / previous.value) * 100 : 0;
-        const previousDeviation = deviationFromRange(previous);
-        const currentDeviation = deviationFromRange(current);
-        const improvementScore = previousDeviation - currentDeviation;
-
-        let trend: "improved" | "worse" | "stable" = "stable";
-        if (Math.abs(improvementScore) > 0.0001) {
-          trend = improvementScore > 0 ? "improved" : "worse";
-        }
-
-        return {
-          name: latestEntry.label,
-          delta,
-          deltaPct,
-          trend,
-        };
-      })
-      .filter((item): item is { name: string; delta: number; deltaPct: number; trend: "improved" | "worse" | "stable" } => Boolean(item));
-
-    return {
-      improved: rows.filter((row) => row.trend === "improved").length,
-      worsened: rows.filter((row) => row.trend === "worse").length,
-      rows: rows.sort((a, b) => Math.abs(b.deltaPct) - Math.abs(a.deltaPct)),
-    };
-  }, [latestSnapshot, previousSnapshot]);
+  const changeSummary = useMemo(
+    () => compareSnapshots(latestSnapshot, previousSnapshot),
+    [latestSnapshot, previousSnapshot],
+  );
 
   if (!isConfigured) {
     return (
@@ -350,7 +453,11 @@ const ReportTracker = () => {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Progress Snapshot</CardTitle>
-            <CardDescription>Latest comparison against your previous saved report.</CardDescription>
+            <CardDescription>
+              {activeComparison
+                ? `Comparing ${formatDate(activeComparison.previous.testDate)} -> ${formatDate(activeComparison.current.testDate)}.`
+                : "Latest comparison against your previous saved report."}
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border border-border bg-background p-3">
@@ -368,6 +475,14 @@ const ReportTracker = () => {
             <div className="rounded-xl border border-border bg-background p-3">
               <p className="text-xs text-muted-foreground">Markers worsened</p>
               <p className="mt-1 text-2xl font-semibold text-red-600">{changeSummary.worsened}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-xs text-muted-foreground">Markers stable</p>
+              <p className="mt-1 text-2xl font-semibold text-foreground">{changeSummary.stable}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-xs text-muted-foreground">Markers matched</p>
+              <p className="mt-1 text-2xl font-semibold text-foreground">{changeSummary.matched}</p>
             </div>
           </CardContent>
         </Card>
@@ -559,8 +674,29 @@ const ReportTracker = () => {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {comparisonPairs.length > 1 && (
+              <div className="mb-3 max-w-sm">
+                <Select value={selectedComparisonPair} onValueChange={setSelectedComparisonPair}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose comparison pair" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {comparisonPairs.map((pair) => (
+                      <SelectItem key={pair.id} value={pair.id}>
+                        {pair.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             {changeSummary.rows.length === 0 ? (
-              <p className="text-sm text-muted-foreground">You need at least two snapshots in Analyzer for comparisons.</p>
+              <p className="text-sm text-muted-foreground">
+                {sortedSnapshots.length < 2
+                  ? "You need at least two snapshots in Analyzer for comparisons."
+                  : "No marker matches were found for this pair. Select a different pair or verify marker names in Analyzer."}
+              </p>
             ) : (
               <div className="max-h-80 overflow-auto rounded-lg border border-border bg-background">
                 <Table>
