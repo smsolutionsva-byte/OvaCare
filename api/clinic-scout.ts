@@ -42,6 +42,13 @@ type ScrapedMapPlace = {
   prominence: number;
 };
 
+type ScrapeOptions = {
+  geolocation?: {
+    latitude: number;
+    longitude: number;
+  };
+};
+
 const specialtyTerms: Record<ClinicSpecialty, string> = {
   gynecologist: "gynecologist women's health clinic",
   endocrinologist: "endocrinologist hormone clinic",
@@ -102,6 +109,19 @@ const parseDistanceFromText = (text: string) => {
     : Number(value.toFixed(2));
 };
 
+const parseCoordinatesFromLocation = (location: string) => {
+  const match = location.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (!match) return null;
+
+  const latitude = Number(match[1]);
+  const longitude = Number(match[2]);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+
+  return { latitude, longitude };
+};
+
 const parseReviewMetaFromLines = (textLines: string[]) => {
   const joined = textLines.join(" ");
 
@@ -145,7 +165,11 @@ const pickAddressFromLines = (textLines: string[]) => {
   return addressHint || textLines[2] || textLines[1] || "Address not clearly listed in map snippet.";
 };
 
-const scrapeGoogleMapsFeed = async (searchQuery: string, maxResults = 10): Promise<ScrapedMapPlace[]> => {
+const scrapeGoogleMapsFeed = async (
+  searchQuery: string,
+  maxResults = 10,
+  options?: ScrapeOptions,
+): Promise<ScrapedMapPlace[]> => {
   let browser: any = null;
 
   try {
@@ -166,7 +190,12 @@ const scrapeGoogleMapsFeed = async (searchQuery: string, maxResults = 10): Promi
       viewport: { width: 980, height: 720 },
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      geolocation: options?.geolocation,
     });
+
+    if (options?.geolocation) {
+      await context.grantPermissions(["geolocation"], { origin: "https://www.google.com" });
+    }
 
     const page = await context.newPage();
     const encodedQuery = searchQuery.replace(/\s+/g, "+");
@@ -284,8 +313,14 @@ const scrapeGoogleMapsFeed = async (searchQuery: string, maxResults = 10): Promi
     });
 
     return [...deduped.values()].slice(0, maxResults);
-  } catch {
-    return [];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown scrape failure";
+
+    if (/Executable doesn't exist|playwright install|download new browsers/i.test(message)) {
+      throw new Error("Playwright Chromium is not installed. Run npx playwright install chromium, then restart the app.");
+    }
+
+    throw new Error(`Google Maps scrape failed: ${message}`);
   } finally {
     if (browser) {
       await browser.close().catch(() => undefined);
@@ -377,14 +412,24 @@ export default async function handler(req: any, res: any) {
     const reviewWeight = parseWeight(req.query?.reviewWeight, 40);
     const prominenceWeight = parseWeight(req.query?.prominenceWeight, 15);
     const weightProfile = normalizeWeights(distanceWeight, reviewWeight, prominenceWeight);
+    const coordinates = parseCoordinatesFromLocation(location);
 
     const mapQuery = `${specialtyTerms[specialty]} near ${location}`;
-    const scraped = await scrapeGoogleMapsFeed(mapQuery, 10);
+    let scraped: ScrapedMapPlace[] = [];
+
+    try {
+      scraped = await scrapeGoogleMapsFeed(mapQuery, 10, {
+        geolocation: coordinates || undefined,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not initialize map scraping.";
+      return json(res, 502, { error: message });
+    }
 
     if (!scraped.length) {
       return json(res, 502, {
         error:
-          "Could not scrape Google Maps results right now. If a consent/location prompt blocked loading, allow permissions and retry.",
+          "Could not load map cards from Google Maps. If consent/location prompts appear, allow them and retry.",
       });
     }
 

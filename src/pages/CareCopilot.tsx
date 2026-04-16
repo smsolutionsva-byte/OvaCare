@@ -643,10 +643,10 @@ const CareCopilot = () => {
     await sendMessage(chatInput);
   }, [chatInput, sendMessage]);
 
-  const handleUseCurrentLocation = async () => {
+  const handleUseCurrentLocation = async (): Promise<string | null> => {
     if (!navigator.geolocation) {
       toast({ title: "Location unsupported", description: "Geolocation is not available in this browser." });
-      return;
+      return null;
     }
 
     try {
@@ -659,7 +659,7 @@ const CareCopilot = () => {
             description: "Enable location access in browser settings, then retry.",
             variant: "destructive",
           });
-          return;
+          return null;
         }
 
         if (permissionStatus.state === "prompt") {
@@ -690,6 +690,7 @@ const CareCopilot = () => {
         title: "Location detected",
         description: "Using GPS coordinates for map and specialist search.",
       });
+      return coordinatesLabel;
     } catch (error) {
       const message =
         error && typeof error === "object" && "message" in error
@@ -707,6 +708,7 @@ const CareCopilot = () => {
             ? "Location request timed out. Try again where GPS signal is better."
             : "Could not fetch current location. Enter city manually.",
       });
+      return null;
     } finally {
       setLocationBusy(false);
     }
@@ -725,11 +727,18 @@ const CareCopilot = () => {
     }
 
     try {
-      if (!location.trim()) {
-        setMapError("Enter a city or use current location before searching.");
+      let searchLocation = location.trim();
+
+      if (!searchLocation) {
+        const detectedLocation = await handleUseCurrentLocation();
+        searchLocation = detectedLocation?.trim() || "";
+      }
+
+      if (!searchLocation) {
+        setMapError("Allow location or enter a city before searching.");
         toast({
-          title: "Location required",
-          description: "Enter a location to search doctors and clinics.",
+          title: "Location needed",
+          description: "Allow location permission, or enter city/area manually.",
           variant: "destructive",
         });
         return;
@@ -738,7 +747,7 @@ const CareCopilot = () => {
       setClinicScout(null);
 
       const query = new URLSearchParams({
-        location: location.trim(),
+        location: searchLocation,
         specialty: effectiveSpecialty,
         distanceWeight: String(distancePriority),
         reviewWeight: String(reviewPriority),
