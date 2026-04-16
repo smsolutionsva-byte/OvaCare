@@ -44,6 +44,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { type LabMarker } from "@/lib/labReportParser";
+import { findClosestMarkerKey, normalizeMarkerForMatch } from "@/lib/markerMatching";
 import { getReportSnapshots, type ReportSnapshot } from "@/lib/reportTracker";
 
 const formatDate = (value: string) => {
@@ -114,19 +115,36 @@ const ReportTracker = () => {
   );
 
   const markerTimelineMap = useMemo(() => {
-    const map = new Map<string, Array<{ date: string; value: number; refMin: number | null; refMax: number | null }>>();
+    const map = new Map<
+      string,
+      {
+        label: string;
+        points: Array<{ date: string; value: number; refMin: number | null; refMax: number | null }>;
+      }
+    >();
 
     for (const snapshot of sortedSnapshots) {
       for (const marker of snapshot.markers) {
-        const key = marker.name;
-        const next = map.get(key) || [];
-        next.push({
+        const normalized = normalizeMarkerForMatch(marker.name);
+        if (!normalized) continue;
+
+        const resolvedKey = map.has(normalized)
+          ? normalized
+          : findClosestMarkerKey(normalized, [...map.keys()]) || normalized;
+
+        const existing = map.get(resolvedKey) || { label: marker.name, points: [] };
+        existing.points.push({
           date: formatDate(snapshot.testDate),
           value: marker.value,
           refMin: marker.refMin,
           refMax: marker.refMax,
         });
-        map.set(key, next);
+
+        if (marker.name.length < existing.label.length) {
+          existing.label = marker.name;
+        }
+
+        map.set(resolvedKey, existing);
       }
     }
 
@@ -136,7 +154,7 @@ const ReportTracker = () => {
   const trackedMarkerNames = useMemo(
     () =>
       [...markerTimelineMap.entries()]
-        .filter(([, points]) => points.length >= 2)
+        .filter(([, series]) => series.points.length >= 2)
         .map(([name]) => name)
         .sort((a, b) => a.localeCompare(b)),
     [markerTimelineMap],
@@ -154,7 +172,7 @@ const ReportTracker = () => {
   }, [selectedMarker, trackedMarkerNames]);
 
   const selectedMarkerSeries = useMemo(
-    () => (selectedMarker ? markerTimelineMap.get(selectedMarker) || [] : []),
+    () => (selectedMarker ? markerTimelineMap.get(selectedMarker)?.points || [] : []),
     [markerTimelineMap, selectedMarker],
   );
 
@@ -167,12 +185,36 @@ const ReportTracker = () => {
       };
     }
 
-    const prevMap = new Map(previousSnapshot.markers.map((marker) => [marker.name.toLowerCase(), marker]));
+    const prevMap = new Map<string, LabMarker[]>();
+
+    for (const marker of previousSnapshot.markers) {
+      const key = normalizeMarkerForMatch(marker.name);
+      if (!key) continue;
+      const list = prevMap.get(key) || [];
+      list.push(marker);
+      prevMap.set(key, list);
+    }
 
     const rows = latestSnapshot.markers
       .map((current) => {
-        const previous = prevMap.get(current.name.toLowerCase());
-        if (!previous) return null;
+        const currentKey = normalizeMarkerForMatch(current.name);
+        if (!currentKey) return null;
+
+        const resolvedKey = prevMap.has(currentKey)
+          ? currentKey
+          : findClosestMarkerKey(currentKey, [...prevMap.keys()]);
+
+        if (!resolvedKey) return null;
+
+        const previousList = prevMap.get(resolvedKey) || [];
+        if (previousList.length === 0) return null;
+
+        // Prefer candidate with the closest value when multiple similarly named markers exist.
+        const previous = previousList.reduce((best, candidate) => {
+          const bestDelta = Math.abs(best.value - current.value);
+          const candidateDelta = Math.abs(candidate.value - current.value);
+          return candidateDelta < bestDelta ? candidate : best;
+        });
 
         const delta = current.value - previous.value;
         const deltaPct = previous.value !== 0 ? (delta / previous.value) * 100 : 0;
@@ -329,7 +371,7 @@ const ReportTracker = () => {
                     </SelectTrigger>
                     <SelectContent>
                       {trackedMarkerNames.map((name) => (
-                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                        <SelectItem key={name} value={name}>{markerTimelineMap.get(name)?.label || name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
