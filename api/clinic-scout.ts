@@ -49,6 +49,10 @@ type ScrapeOptions = {
   };
 };
 
+export const config = {
+  maxDuration: 60,
+};
+
 const specialtyTerms: Record<ClinicSpecialty, string> = {
   gynecologist: "gynecologist women's health clinic",
   endocrinologist: "endocrinologist hormone clinic",
@@ -165,6 +169,39 @@ const pickAddressFromLines = (textLines: string[]) => {
   return addressHint || textLines[2] || textLines[1] || "Address not clearly listed in map snippet.";
 };
 
+const launchMapsBrowser = async () => {
+  const playwright = await import("playwright-core");
+  const chromiumModule = await import("@sparticuz/chromium");
+  const chromium = chromiumModule.default;
+
+  const configuredPath =
+    process.env.CHROME_EXECUTABLE_PATH ||
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+    "";
+
+  const resolvedPath = configuredPath || (await chromium.executablePath().catch(() => ""));
+
+  if (!resolvedPath) {
+    throw new Error(
+      "Chromium executable is unavailable in this environment. Ensure @sparticuz/chromium is bundled on Vercel.",
+    );
+  }
+
+  const chromiumArgs = Array.isArray(chromium.args) ? chromium.args : [];
+
+  return playwright.chromium.launch({
+    executablePath: resolvedPath,
+    headless: true,
+    args: [
+      ...chromiumArgs,
+      "--disable-blink-features=AutomationControlled",
+      "--disable-gpu",
+      "--disable-dev-shm-usage",
+      "--no-sandbox",
+    ],
+  });
+};
+
 const scrapeGoogleMapsFeed = async (
   searchQuery: string,
   maxResults = 10,
@@ -173,17 +210,7 @@ const scrapeGoogleMapsFeed = async (
   let browser: any = null;
 
   try {
-    const playwright = await import("@playwright/test");
-
-    browser = await playwright.chromium.launch({
-      headless: true,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
-    });
+    browser = await launchMapsBrowser();
 
     const context = await browser.newContext({
       locale: "en-US",
@@ -316,8 +343,10 @@ const scrapeGoogleMapsFeed = async (
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown scrape failure";
 
-    if (/Executable doesn't exist|playwright install|download new browsers/i.test(message)) {
-      throw new Error("Playwright Chromium is not installed. Run npx playwright install chromium, then restart the app.");
+    if (/Chromium executable is unavailable|executable path|ENOENT|cannot find module/i.test(message)) {
+      throw new Error(
+        "Serverless Chromium is not available at runtime. Install dependencies and redeploy Vercel.",
+      );
     }
 
     throw new Error(`Google Maps scrape failed: ${message}`);
