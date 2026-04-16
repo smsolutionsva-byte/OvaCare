@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Bot,
   Copy,
+  ExternalLink,
   FlaskConical,
   Loader2,
   LocateFixed,
@@ -15,6 +16,7 @@ import {
   Sparkles,
   Stethoscope,
   Volume2,
+  X,
 } from "lucide-react";
 import {
   Area,
@@ -63,10 +65,8 @@ import {
   type CareMessage,
 } from "@/lib/careCopilot";
 import {
-  buildWebClinicSearchLinks,
   specialtyLabelMap,
   type ClinicSpecialty,
-  type WebClinicSearchLinks,
 } from "@/lib/clinicFinder";
 import { getReportSnapshots, type ReportSnapshot } from "@/lib/reportTracker";
 import { simulateWhatIfPlan } from "@/lib/whatIfSimulator";
@@ -104,6 +104,45 @@ type CopilotApiResponse = {
   confidence: "low" | "medium" | "high";
   providerUsed?: Provider;
   providerErrors?: string[];
+};
+
+type ClinicScoutItem = {
+  id: string;
+  name: string;
+  address: string;
+  distanceKm: number;
+  reviewSummary: string;
+  reviewConfidence: "low" | "medium" | "high";
+  score: number;
+  scoreBreakdown: {
+    distance: number;
+    reviews: number;
+    prominence: number;
+  };
+  reasons: string[];
+  sources: {
+    primaryUrl: string;
+    googleMapsUrl: string;
+    yelpUrl: string;
+    webSearchUrl: string;
+  };
+};
+
+type ClinicScoutResult = {
+  query: string;
+  centerLabel: string;
+  mapEmbedUrl: string;
+  weightProfile: {
+    distance: number;
+    reviews: number;
+    prominence: number;
+  };
+  items: ClinicScoutItem[];
+  recommendation: {
+    bestClinicId: string;
+    summary: string;
+    reasons: string[];
+  } | null;
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -204,7 +243,7 @@ const CareCopilot = () => {
   const [provider, setProvider] = useState<Provider>("groq");
   const [autoSpeak, setAutoSpeak] = useState(false);
   const [evidenceMode, setEvidenceMode] = useState(true);
-  const [autoApplySpecialistPriority, setAutoApplySpecialistPriority] = useState(true);
+  const [autoApplySpecialistPriority, setAutoApplySpecialistPriority] = useState(false);
 
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<CareMessage[]>([]);
@@ -226,12 +265,27 @@ const CareCopilot = () => {
 
   const [specialty, setSpecialty] = useState<ClinicSpecialty>("gynecologist");
   const [location, setLocation] = useState("");
-  const [webSearchLinks, setWebSearchLinks] = useState<WebClinicSearchLinks | null>(null);
+  const [distancePriority, setDistancePriority] = useState(45);
+  const [reviewPriority, setReviewPriority] = useState(40);
+  const [prominencePriority, setProminencePriority] = useState(15);
+  const [clinicScout, setClinicScout] = useState<ClinicScoutResult | null>(null);
+  const [clinicScoutOpen, setClinicScoutOpen] = useState(false);
   const [searchingClinics, setSearchingClinics] = useState(false);
+  const [scoutStepIndex, setScoutStepIndex] = useState(0);
   const [locationBusy, setLocationBusy] = useState(false);
   const [mapError, setMapError] = useState("");
 
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+
+  const scoutSteps = useMemo(
+    () => [
+      "Scanning nearby clinics and specialist listings...",
+      "Checking review-rich sources across Google and the web...",
+      "Comparing distance, trust signals, and source quality...",
+      "Preparing ranked shortlist with suggested best pick...",
+    ],
+    [],
+  );
 
   const trackerContext = useMemo(() => buildTrackerContext(snapshots), [snapshots]);
   const healthTwin = useMemo(() => buildHealthTwin(snapshots), [snapshots]);
@@ -262,6 +316,15 @@ const CareCopilot = () => {
 
     return null;
   }, [latestCopilotResponse]);
+
+  const normalizedClinicPriorities = useMemo(() => {
+    const total = Math.max(1, distancePriority + reviewPriority + prominencePriority);
+    return {
+      distance: Math.round((distancePriority / total) * 100),
+      reviews: Math.round((reviewPriority / total) * 100),
+      prominence: Math.round((prominencePriority / total) * 100),
+    };
+  }, [distancePriority, prominencePriority, reviewPriority]);
 
   const simulationResult = useMemo(
     () =>
@@ -296,6 +359,19 @@ const CareCopilot = () => {
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, sending]);
+
+  useEffect(() => {
+    if (!searchingClinics) {
+      setScoutStepIndex(0);
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setScoutStepIndex((prev) => (prev + 1) % scoutSteps.length);
+    }, 1400);
+
+    return () => window.clearInterval(timer);
+  }, [scoutSteps.length, searchingClinics]);
 
   const speakText = useCallback((text: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
@@ -615,6 +691,7 @@ const CareCopilot = () => {
   const handleFindClinics = async () => {
     setSearchingClinics(true);
     setMapError("");
+    setClinicScoutOpen(true);
 
     const effectiveSpecialty =
       autoApplySpecialistPriority && topMapCompatibleSpecialty ? topMapCompatibleSpecialty : specialty;
@@ -634,15 +711,37 @@ const CareCopilot = () => {
         return;
       }
 
-      const links = buildWebClinicSearchLinks({
-        location,
+      setClinicScout(null);
+
+      const query = new URLSearchParams({
+        location: location.trim(),
         specialty: effectiveSpecialty,
+        distanceWeight: String(distancePriority),
+        reviewWeight: String(reviewPriority),
+        prominenceWeight: String(prominencePriority),
       });
 
-      setWebSearchLinks(links);
+      const response = await fetch(`/api/clinic-scout?${query.toString()}`);
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error || "Unable to scout clinics right now.");
+      }
+
+      const payload = (await response.json()) as ClinicScoutResult;
+      setClinicScout(payload);
+
+      if (!payload.items.length) {
+        toast({
+          title: "No clinics found",
+          description: "Try a nearby location or broader specialist type.",
+        });
+        return;
+      }
+
       toast({
-        title: "Search ready",
-        description: `Showing ${specialtyLabelMap[effectiveSpecialty]} results in Google Maps. Open Yelp/web links for reviews.`,
+        title: "Clinic Scout ready",
+        description: `${payload.items.length} clinics ranked using your distance/review/prominence priorities.`,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Clinic search failed.";
@@ -872,6 +971,102 @@ const CareCopilot = () => {
         </div>
       </div>
 
+      {clinicScoutOpen && (
+        <div className="fixed left-3 top-20 z-30 w-[min(430px,calc(100vw-1.5rem))]">
+          <Card className="max-h-[78vh] overflow-hidden border-primary/20 shadow-xl backdrop-blur">
+            <CardHeader className="border-b border-border/70 bg-background/95 pb-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base">Clinic Scout</CardTitle>
+                  <CardDescription>Map + review-source intelligence ranked for your case</CardDescription>
+                </div>
+                <Button size="sm" variant="ghost" onClick={() => setClinicScoutOpen(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardHeader>
+
+            <CardContent className="max-h-[68vh] space-y-3 overflow-auto p-3">
+              {searchingClinics ? (
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+                  <div className="flex items-center gap-2 text-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" /> Looking through clinics and checking around...
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">{scoutSteps[scoutStepIndex]}</p>
+                </div>
+              ) : clinicScout ? (
+                <>
+                  <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">{clinicScout.centerLabel}</span> · {clinicScout.query}
+                  </div>
+
+                  <div className="rounded-md border border-border bg-background px-3 py-2 text-[11px] text-muted-foreground">
+                    Ranking priorities: distance {clinicScout.weightProfile.distance}% · reviews {clinicScout.weightProfile.reviews}% · prominence {clinicScout.weightProfile.prominence}%
+                  </div>
+
+                  <div className="h-48 overflow-hidden rounded-lg border border-border">
+                    <iframe
+                      title="Clinic scout map"
+                      src={clinicScout.mapEmbedUrl}
+                      className="h-full w-full"
+                      loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
+                    />
+                  </div>
+
+                  {clinicScout.recommendation && (
+                    <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-primary">Best Pick Right Now</p>
+                      <p className="mt-1 text-sm text-foreground">{clinicScout.recommendation.summary}</p>
+                      <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                        {clinicScout.recommendation.reasons.map((reason) => (
+                          <li key={reason}>- {reason}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    {clinicScout.items.map((item) => (
+                      <div key={item.id} className="rounded-lg border border-border bg-background p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-foreground">{item.name}</p>
+                          <Badge variant="outline">{item.distanceKm.toFixed(1)} km</Badge>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">{item.address}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{item.reviewSummary}</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <Badge variant={item.reviewConfidence === "high" ? "secondary" : "outline"}>
+                            review confidence: {item.reviewConfidence}
+                          </Badge>
+                          <Badge variant="outline">score {item.score.toFixed(1)}</Badge>
+                          <Badge variant="outline">D {item.scoreBreakdown.distance}</Badge>
+                          <Badge variant="outline">R {item.scoreBreakdown.reviews}</Badge>
+                          <Badge variant="outline">P {item.scoreBreakdown.prominence}</Badge>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button size="sm" variant="outline" onClick={() => window.open(item.sources.googleMapsUrl, "_blank", "noopener,noreferrer")}>
+                            <ExternalLink className="mr-1 h-3.5 w-3.5" /> Google Maps
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => window.open(item.sources.yelpUrl, "_blank", "noopener,noreferrer")}>
+                            <ExternalLink className="mr-1 h-3.5 w-3.5" /> Yelp
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => window.open(item.sources.primaryUrl, "_blank", "noopener,noreferrer")}>
+                            <ExternalLink className="mr-1 h-3.5 w-3.5" /> Source
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">Run a doctor search to start live clinic scouting.</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <Sheet open={toolsOpen} onOpenChange={setToolsOpen}>
         <SheetTrigger asChild>
           <Button
@@ -1050,9 +1245,42 @@ const CareCopilot = () => {
                 ) : null}
               </div>
 
+              <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-foreground">Ranking priorities</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Effective: D {normalizedClinicPriorities.distance}% · R {normalizedClinicPriorities.reviews}% · P {normalizedClinicPriorities.prominence}%
+                  </p>
+                </div>
+
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Distance (nearby first)</span>
+                    <span>{distancePriority}</span>
+                  </div>
+                  <Slider value={[distancePriority]} onValueChange={(values) => setDistancePriority(values[0])} min={0} max={100} step={1} />
+                </div>
+
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Review quality</span>
+                    <span>{reviewPriority}</span>
+                  </div>
+                  <Slider value={[reviewPriority]} onValueChange={(values) => setReviewPriority(values[0])} min={0} max={100} step={1} />
+                </div>
+
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Listing prominence</span>
+                    <span>{prominencePriority}</span>
+                  </div>
+                  <Slider value={[prominencePriority]} onValueChange={(values) => setProminencePriority(values[0])} min={0} max={100} step={1} />
+                </div>
+              </div>
+
               <div className="flex gap-2">
                 <Button className="gradient-primary w-full border-0" onClick={handleFindClinics} disabled={searchingClinics}>
-                  {searchingClinics ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />} Find Clinics
+                  {searchingClinics ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />} {clinicScout ? "Re-rank Clinics" : "Find Clinics"}
                 </Button>
                 <Button
                   variant="outline"
@@ -1070,14 +1298,20 @@ const CareCopilot = () => {
               {mapError && <p className="text-xs text-destructive">{mapError}</p>}
 
               <div className="h-64 overflow-hidden rounded-xl border border-border bg-muted/20">
-                {!webSearchLinks ? (
+                {searchingClinics ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    <p className="text-sm font-medium text-foreground">Looking through clinics and checking around...</p>
+                    <p className="text-xs text-muted-foreground">{scoutSteps[scoutStepIndex]}</p>
+                  </div>
+                ) : !clinicScout ? (
                   <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
-                    Search to preview Google Maps results here.
+                    Search to start Clinic Scout and open map analysis.
                   </div>
                 ) : (
                   <iframe
                     title="Clinic map results"
-                    src={webSearchLinks.googleMapsEmbedUrl}
+                    src={clinicScout.mapEmbedUrl}
                     className="h-full w-full"
                     loading="lazy"
                     referrerPolicy="no-referrer-when-downgrade"
@@ -1086,64 +1320,66 @@ const CareCopilot = () => {
               </div>
 
               <div className="space-y-3 rounded-lg border border-border bg-background p-3">
-                <p className="text-xs text-muted-foreground">
-                  Open review-driven sources directly. Google Maps shows ratings/reviews, Yelp shows listing reviews where available.
-                </p>
+                {!clinicScout ? (
+                  <p className="text-xs text-muted-foreground">Run search to generate ranked clinics and review signals.</p>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">
+                        Query: <span className="font-medium text-foreground">{clinicScout.query}</span>
+                      </p>
+                      <Badge variant="outline" className="text-[11px]">
+                        D {clinicScout.weightProfile.distance}% · R {clinicScout.weightProfile.reviews}% · P {clinicScout.weightProfile.prominence}%
+                      </Badge>
+                      <Button size="sm" variant="outline" onClick={() => setClinicScoutOpen(true)}>
+                        Open Left Scout Panel
+                      </Button>
+                    </div>
 
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!webSearchLinks}
-                    onClick={() => {
-                      if (!webSearchLinks) return;
-                      window.open(webSearchLinks.googleMapsSearchUrl, "_blank", "noopener,noreferrer");
-                    }}
-                  >
-                    Open Google Maps
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!webSearchLinks}
-                    onClick={() => {
-                      if (!webSearchLinks) return;
-                      window.open(webSearchLinks.yelpSearchUrl, "_blank", "noopener,noreferrer");
-                    }}
-                  >
-                    Open Yelp
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!webSearchLinks}
-                    onClick={() => {
-                      if (!webSearchLinks) return;
-                      window.open(webSearchLinks.webSearchUrl, "_blank", "noopener,noreferrer");
-                    }}
-                  >
-                    Open Web Results
-                  </Button>
-                </div>
+                    {clinicScout.recommendation && (
+                      <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+                        <p className="font-semibold text-foreground">AI Recommendation</p>
+                        <p className="mt-1 text-muted-foreground">{clinicScout.recommendation.summary}</p>
+                      </div>
+                    )}
 
-                {webSearchLinks && (
-                  <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                    Query: <span className="font-medium text-foreground">{webSearchLinks.query}</span>
-                  </div>
+                    <div className="space-y-2">
+                      {clinicScout.items.slice(0, 3).map((item) => (
+                        <div key={item.id} className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-medium text-foreground">{item.name}</p>
+                            <Badge variant="outline">{item.distanceKm.toFixed(1)} km</Badge>
+                          </div>
+                          <p className="mt-1 text-muted-foreground">{item.reviewSummary}</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Fit score: D {item.scoreBreakdown.distance} · R {item.scoreBreakdown.reviews} · P {item.scoreBreakdown.prominence}
+                          </p>
+                          <div className="mt-2 flex gap-2">
+                            <Button size="sm" variant="outline" onClick={() => window.open(item.sources.googleMapsUrl, "_blank", "noopener,noreferrer")}>
+                              <ExternalLink className="mr-1 h-3.5 w-3.5" /> Maps
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => window.open(item.sources.yelpUrl, "_blank", "noopener,noreferrer")}>
+                              <ExternalLink className="mr-1 h-3.5 w-3.5" /> Yelp
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        void sendMessage(
+                          `I scouted ${clinicScout.items.length} ${specialtyLabelMap[specialty]} options near ${location}. My ranking priorities are distance ${clinicScout.weightProfile.distance}%, reviews ${clinicScout.weightProfile.reviews}%, prominence ${clinicScout.weightProfile.prominence}%. Compare top 3 by these priorities, review confidence, and reliability, then tell me which one to book first and what to ask in consultation.`,
+                        )
+                      }
+                      disabled={sending}
+                    >
+                      <Bot className="mr-1 h-3.5 w-3.5" /> Ask AI to pick best option
+                    </Button>
+                  </>
                 )}
-
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    void sendMessage(
-                      `I searched for ${specialtyLabelMap[specialty]} near ${location}. Help me shortlist top clinics from Google/Yelp results based on ratings, review quality, distance, and follow-up support.`,
-                    )
-                  }
-                  disabled={sending || !webSearchLinks}
-                >
-                  <Bot className="mr-1 h-3.5 w-3.5" /> Help me choose from reviews
-                </Button>
               </div>
             </TabsContent>
 
