@@ -143,7 +143,7 @@ const ReportTracker = () => {
       string,
       {
         label: string;
-        points: Array<{ date: string; value: number; refMin: number | null; refMax: number | null }>;
+        points: Array<{ date: string; value: number; refMin: number | null; refMax: number | null; unit: string }>;
       }
     >();
 
@@ -162,6 +162,7 @@ const ReportTracker = () => {
           value: marker.value,
           refMin: marker.refMin,
           refMax: marker.refMax,
+          unit: marker.unit || "",
         });
 
         if (marker.name.length < existing.label.length) {
@@ -198,6 +199,21 @@ const ReportTracker = () => {
   const selectedMarkerSeries = useMemo(
     () => (selectedMarker ? markerTimelineMap.get(selectedMarker)?.points || [] : []),
     [markerTimelineMap, selectedMarker],
+  );
+
+  const selectedMarkerLabel = useMemo(
+    () => (selectedMarker ? markerTimelineMap.get(selectedMarker)?.label || selectedMarker : "Selected marker"),
+    [markerTimelineMap, selectedMarker],
+  );
+
+  const selectedMarkerUnit = useMemo(
+    () => selectedMarkerSeries.find((point) => point.unit)?.unit || "",
+    [selectedMarkerSeries],
+  );
+
+  const hasReferenceBounds = useMemo(
+    () => selectedMarkerSeries.some((point) => point.refMin != null || point.refMax != null),
+    [selectedMarkerSeries],
   );
 
   const changeSummary = useMemo(() => {
@@ -373,7 +389,11 @@ const ReportTracker = () => {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Marker Timeline</CardTitle>
-            <CardDescription>Track one marker over time with optional reference bounds.</CardDescription>
+            <CardDescription>
+              {trackedMarkerNames.length > 0
+                ? `Tracking: ${selectedMarkerLabel}${selectedMarkerUnit ? ` (${selectedMarkerUnit})` : ""}`
+                : "Track one marker over time with optional reference bounds."}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {trackedMarkerNames.length === 0 ? (
@@ -396,13 +416,56 @@ const ReportTracker = () => {
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={selectedMarkerSeries} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                      <YAxis tick={{ fontSize: 12 }} />
-                      <Tooltip />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 12 }}
+                        label={{ value: "Report Date", position: "insideBottom", offset: -4, style: { fontSize: 11 } }}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 12 }}
+                        label={{
+                          value: selectedMarkerUnit ? `Value (${selectedMarkerUnit})` : "Value",
+                          angle: -90,
+                          position: "insideLeft",
+                          style: { textAnchor: "middle", fontSize: 11 },
+                        }}
+                      />
+                      <Tooltip
+                        formatter={(value: number, name: string) => {
+                          const suffix = selectedMarkerUnit ? ` ${selectedMarkerUnit}` : "";
+                          return [`${Number(value).toFixed(2)}${suffix}`, name];
+                        }}
+                        labelFormatter={(label) => `Report date: ${label}`}
+                      />
                       <Legend />
-                      <Line type="monotone" dataKey="value" stroke="#0ea5e9" strokeWidth={2.5} dot={{ r: 4 }} name="Value" />
-                      <Line type="monotone" dataKey="refMin" stroke="#22c55e" strokeDasharray="4 4" dot={false} name="Ref Min" />
-                      <Line type="monotone" dataKey="refMax" stroke="#ef4444" strokeDasharray="4 4" dot={false} name="Ref Max" />
+                      <Line
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#0ea5e9"
+                        strokeWidth={2.5}
+                        dot={{ r: 4 }}
+                        name={`Observed ${selectedMarkerUnit ? `(${selectedMarkerUnit})` : "value"}`}
+                      />
+                      {hasReferenceBounds && (
+                        <Line
+                          type="monotone"
+                          dataKey="refMin"
+                          stroke="#22c55e"
+                          strokeDasharray="4 4"
+                          dot={false}
+                          name={`Reference min${selectedMarkerUnit ? ` (${selectedMarkerUnit})` : ""}`}
+                        />
+                      )}
+                      {hasReferenceBounds && (
+                        <Line
+                          type="monotone"
+                          dataKey="refMax"
+                          stroke="#ef4444"
+                          strokeDasharray="4 4"
+                          dot={false}
+                          name={`Reference max${selectedMarkerUnit ? ` (${selectedMarkerUnit})` : ""}`}
+                        />
+                      )}
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -414,7 +477,9 @@ const ReportTracker = () => {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Out-of-Range Trend</CardTitle>
-            <CardDescription>How many markers were outside range across each snapshot.</CardDescription>
+            <CardDescription>
+              Count of high/low markers per report, with total extracted marker count for context.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {outOfRangeTrend.length === 0 ? (
@@ -424,11 +489,36 @@ const ReportTracker = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={outOfRangeTrend} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                    <Tooltip />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 12 }}
+                      label={{ value: "Report Date", position: "insideBottom", offset: -4, style: { fontSize: 11 } }}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      tick={{ fontSize: 12 }}
+                      label={{ value: "Marker count", angle: -90, position: "insideLeft", style: { textAnchor: "middle", fontSize: 11 } }}
+                    />
+                    <Tooltip
+                      formatter={(value: number, name: string) => [Math.round(Number(value)), name]}
+                      labelFormatter={(label) => `Report date: ${label}`}
+                    />
                     <Legend />
-                    <Area type="monotone" dataKey="outOfRange" stroke="#f97316" fill="#f9731633" name="Outside Range" />
+                    <Area
+                      type="monotone"
+                      dataKey="outOfRange"
+                      stroke="#f97316"
+                      fill="#f9731633"
+                      name="Out-of-range markers (high + low)"
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="total"
+                      stroke="#64748b"
+                      strokeWidth={2}
+                      dot={{ r: 2 }}
+                      name="Total extracted markers"
+                    />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
