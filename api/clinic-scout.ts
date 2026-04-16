@@ -32,6 +32,18 @@ type ScoutClinic = {
   };
 };
 
+type ScrapedMapPlace = {
+  name: string;
+  address: string;
+  distanceKm: number | null;
+  rating: number | null;
+  reviewCount: number | null;
+  reviewConfidence: "low" | "medium" | "high";
+  reviewSummary: string;
+  sourceUrl: string;
+  prominence: number;
+};
+
 type WeightProfile = {
   distance: number;
   reviews: number;
@@ -53,6 +65,10 @@ const specialtyLabels: Record<ClinicSpecialty, string> = {
   dermatologist: "Dermatologist",
   nutrition: "Nutrition specialist",
 };
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 const json = (res: any, status: number, payload: unknown) => res.status(status).json(payload);
 
@@ -134,6 +150,230 @@ const haversineKm = (aLat: number, aLon: number, bLat: number, bLon: number) => 
   return 2 * earthKm * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 };
 
+const parseCompactNumber = (value: string) => {
+  const normalized = value.trim().replace(/,/g, "");
+  if (!normalized) return null;
+
+  const suffix = normalized.at(-1)?.toLowerCase();
+  const base = Number(suffix === "k" || suffix === "m" ? normalized.slice(0, -1) : normalized);
+  if (!Number.isFinite(base)) return null;
+
+  if (suffix === "k") return Math.round(base * 1000);
+  if (suffix === "m") return Math.round(base * 1_000_000);
+  return Math.round(base);
+};
+
+const parseDistanceFromText = (text: string) => {
+  const match = text.match(/(\d+(?:\.\d+)?)\s?(km|m)\b/i);
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return null;
+
+  return match[2].toLowerCase() === "m"
+    ? Number((value / 1000).toFixed(2))
+    : Number(value.toFixed(2));
+};
+
+const parseReviewMetaFromLines = (textLines: string[]) => {
+  const joined = textLines.join(" ");
+
+  const ratingWithCount = joined.match(/([0-5](?:\.\d)?)\s*\(([^)]+)\)/);
+  const ratingOnly = joined.match(/([0-5](?:\.\d)?)\s*(?:stars?|\u2605)/i);
+  const countOnly = joined.match(/([\d.,KkMm]+)\s+reviews?/i);
+
+  const rating = Number(ratingWithCount?.[1] || ratingOnly?.[1] || NaN);
+  const reviewCountRaw = ratingWithCount?.[2] || countOnly?.[1] || "";
+  const reviewCount = parseCompactNumber(reviewCountRaw);
+  const mentionCount = textLines.filter((line) => /review|rating|stars?/i.test(line)).length;
+
+  const safeRating = Number.isFinite(rating) ? rating : null;
+
+  const reviewSignal = clamp(
+    (safeRating ? (safeRating / 5) * 85 : 0) + (reviewCount ? Math.min(15, Math.log10(reviewCount + 1) * 5) : 0),
+    0,
+    100,
+  );
+
+  let reviewConfidence: "low" | "medium" | "high" = "low";
+  if ((safeRating && reviewCount) || mentionCount >= 2) reviewConfidence = "high";
+  else if (safeRating || mentionCount === 1) reviewConfidence = "medium";
+
+  const reviewSummary = safeRating && reviewCount
+    ? `Google Maps rating ~${safeRating.toFixed(1)}/5 from about ${reviewCount.toLocaleString()} reviews.`
+    : safeRating
+      ? `Google Maps rating ~${safeRating.toFixed(1)}/5 found; review count not clearly visible.`
+      : mentionCount > 0
+        ? "Review mentions detected in map card; open source for full details."
+        : "Limited review details visible in map card; verify manually in Google Maps and Yelp.";
+
+  return {
+    reviewSignal,
+    reviewConfidence,
+    reviewSummary,
+    rating: safeRating,
+    reviewCount,
+  };
+};
+
+const pickAddressFromLines = (textLines: string[]) => {
+  const addressHint = textLines.find((line) =>
+    /(road|rd\b|street|st\b|avenue|ave\b|lane|ln\b|nagar|sector|block|colony|hospital|clinic|near)/i.test(line),
+  );
+
+  return addressHint || textLines[2] || textLines[1] || "Address not clearly listed in map snippet.";
+};
+
+const scrapeGoogleMapsFeed = async (searchQuery: string, maxResults = 10): Promise<ScrapedMapPlace[]> => {
+  let browser: any = null;
+
+  try {
+    const playwright = await import("@playwright/test");
+
+    browser = await playwright.chromium.launch({
+      headless: true,
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+      ],
+    });
+
+    const context = await browser.newContext({
+      locale: "en-US",
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    });
+
+    const page = await context.newPage();
+    const encoded = searchQuery.trim().replace(/\s+/g, "+");
+    await page.goto(`https://www.google.com/maps/search/${encoded}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+
+    const popupSelectors = [
+      'button:has-text("Accept all")',
+      'button:has-text("Reject all")',
+      'button:has-text("Accept")',
+      'button:has-text("I agree")',
+      'button:has-text("Agree")',
+      'form[action*="consent"] button',
+    ];
+
+    for (const selector of popupSelectors) {
+      try {
+        const popupButton = page.locator(selector).first();
+        if (await popupButton.isVisible({ timeout: 1200 })) {
+          await popupButton.click({ timeout: 1200 });
+          await delay(600);
+          break;
+        }
+      } catch {
+        // Keep trying other selectors.
+      }
+    }
+
+    try {
+      await page.waitForSelector("div[role='feed']", { timeout: 12000 });
+    } catch {
+      await page.mouse.wheel(0, 320);
+      await page.waitForSelector("div[role='feed']", { timeout: 7000 });
+    }
+
+    let smoothScrolling = true;
+    const scrollLoop = (async () => {
+      while (smoothScrolling) {
+        const scrollBy = 120 + Math.floor(Math.random() * 160);
+        await page
+          .$eval(
+            "div[role='feed']",
+            (feed, pixels) => {
+              (feed as any).scrollTop += Number(pixels);
+            },
+            scrollBy,
+          )
+          .catch(() => undefined);
+
+        await delay(400 + Math.floor(Math.random() * 700));
+      }
+    })();
+
+    const startedAt = Date.now();
+    let cards: Array<{ name: string; href: string; textLines: string[] }> = [];
+
+    while (Date.now() - startedAt < 20000) {
+      cards = await page.$$eval("div[role='feed'] > div > div[jsaction]", (nodes) =>
+        nodes.map((node) => {
+          const card = node as any;
+          const anchor = card.querySelector("a[aria-label]");
+          const headline = card.querySelector(".fontHeadlineSmall");
+          const titleH3 = card.querySelector("h3");
+
+          const name = String(
+            anchor?.getAttribute?.("aria-label") ||
+            headline?.textContent ||
+            titleH3?.textContent ||
+            "",
+          ).trim();
+
+          const href = String(anchor?.href || "").trim();
+          const textLines = String(card.innerText || card.textContent || "")
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+
+          return { name, href, textLines };
+        }),
+      );
+
+      const loaded = cards.filter((card) => card.name).length;
+      if (loaded >= maxResults) break;
+
+      await delay(800);
+    }
+
+    smoothScrolling = false;
+    await Promise.race([scrollLoop, delay(1800)]);
+
+    const deduped = new Map<string, ScrapedMapPlace>();
+    const fallbackSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
+
+    cards.forEach((card, index) => {
+      if (!card.name) return;
+
+      const reviewMeta = parseReviewMetaFromLines(card.textLines);
+      const distanceKm = parseDistanceFromText(card.textLines.join(" "));
+      const address = pickAddressFromLines(card.textLines);
+      const uniquenessKey = `${card.name.toLowerCase()}|${address.toLowerCase()}`;
+      if (deduped.has(uniquenessKey)) return;
+
+      const prominence = clamp(1 - index / Math.max(10, maxResults * 1.4), 0.25, 1);
+
+      deduped.set(uniquenessKey, {
+        name: card.name,
+        address,
+        distanceKm,
+        rating: reviewMeta.rating,
+        reviewCount: reviewMeta.reviewCount,
+        reviewConfidence: reviewMeta.reviewConfidence,
+        reviewSummary: reviewMeta.reviewSummary,
+        sourceUrl: card.href || fallbackSearchUrl,
+        prominence,
+      });
+    });
+
+    return [...deduped.values()].slice(0, maxResults);
+  } catch {
+    return [];
+  } finally {
+    if (browser) {
+      await browser.close().catch(() => undefined);
+    }
+  }
+};
+
 const extractRatingCandidates = (text: string) => {
   const matches = [...text.matchAll(/([0-5](?:\.\d)?)\s*(?:\/\s*5|stars?)/gi)];
   return matches
@@ -182,6 +422,32 @@ const normalizeWeights = (distance: number, reviews: number, prominence: number)
   };
 };
 
+const buildClinicScore = (params: {
+  distanceKm: number | null;
+  reviewSignal: number;
+  prominenceSignal: number;
+  weights: WeightProfile;
+}) => {
+  const distanceSignal = params.distanceKm === null
+    ? 45
+    : Math.max(0, 100 - params.distanceKm * 8);
+
+  const totalScore = Number(
+    ((distanceSignal * params.weights.distance +
+      params.reviewSignal * params.weights.reviews +
+      params.prominenceSignal * params.weights.prominence) / 100).toFixed(1),
+  );
+
+  return {
+    totalScore,
+    scoreBreakdown: {
+      distance: Math.round(distanceSignal),
+      reviews: Math.round(params.reviewSignal),
+      prominence: Math.round(params.prominenceSignal),
+    },
+  };
+};
+
 const scoutOneClinic = async (clinic: {
   id: string;
   name: string;
@@ -216,22 +482,20 @@ const scoutOneClinic = async (clinic: {
 
   const reviewSignals = collectReviewSignals(snippets);
 
-  const distanceSignal = Math.max(0, 100 - clinic.distanceKm * 8);
-  const prominenceSignal = Math.min(100, Math.max(0, clinic.importance * 100));
   const reviewSignal = Math.min(
     100,
     (reviewSignals.avgRating ? (reviewSignals.avgRating / 5) * 85 : 0) + Math.min(15, reviewSignals.reviewMentions * 5),
   );
 
-  const totalScore = Number(
-    ((distanceSignal * weights.distance + reviewSignal * weights.reviews + prominenceSignal * weights.prominence) / 100).toFixed(1),
-  );
+  const prominenceSignal = Math.min(100, Math.max(0, clinic.importance * 100));
+  const scoring = buildClinicScore({
+    distanceKm: clinic.distanceKm,
+    reviewSignal,
+    prominenceSignal,
+    weights,
+  });
 
-  const scoreBreakdown = {
-    distance: Math.round(distanceSignal),
-    reviews: Math.round(reviewSignal),
-    prominence: Math.round(prominenceSignal),
-  };
+  const scoreBreakdown = scoring.scoreBreakdown;
 
   const strongestFactor = [
     { key: "distance", value: scoreBreakdown.distance },
@@ -261,7 +525,7 @@ const scoutOneClinic = async (clinic: {
     distanceKm: Number(clinic.distanceKm.toFixed(2)),
     reviewSummary: reviewSignals.reviewSummary,
     reviewConfidence: reviewSignals.reviewConfidence,
-    score: totalScore,
+    score: scoring.totalScore,
     scoreBreakdown,
     reasons,
     sources: {
@@ -305,6 +569,84 @@ export default async function handler(req: any, res: any) {
 
     const centerLat = Number(geocodeRows[0].lat);
     const centerLon = Number(geocodeRows[0].lon);
+
+    const specialtyLabel = specialtyLabels[specialty];
+    const mapQuery = `${specialtyLabel} near ${location}`;
+
+    const scrapedMapPlaces = await scrapeGoogleMapsFeed(mapQuery, 10);
+    const useLiveMapRanking = scrapedMapPlaces.length >= 3;
+
+    if (useLiveMapRanking) {
+      const rankedFromMap = scrapedMapPlaces
+        .map((place, index) => {
+          const estimatedDistance = place.distanceKm ?? Number((0.8 + index * 1.6).toFixed(2));
+          const prominenceSignal = Math.round(place.prominence * 100);
+          const reviewSignal = clamp(
+            (place.rating ? (place.rating / 5) * 85 : 0) +
+              (place.reviewCount ? Math.min(15, Math.log10(place.reviewCount + 1) * 5) : 0),
+            0,
+            100,
+          );
+
+          const scoring = buildClinicScore({
+            distanceKm: estimatedDistance,
+            reviewSignal,
+            prominenceSignal,
+            weights: weightProfile,
+          });
+
+          const reasons = [
+            place.distanceKm !== null
+              ? `${estimatedDistance.toFixed(1)} km from selected location.`
+              : "Google Maps card distance not explicit; using nearby-listing estimate.",
+            place.reviewSummary,
+            "Ranked from live Google Maps feed order and quality signals.",
+          ];
+
+          const mapSearchUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${place.name} ${location}`)}`;
+
+          return {
+            id: `${place.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${index}`,
+            name: place.name,
+            address: place.address,
+            lat: centerLat,
+            lon: centerLon,
+            distanceKm: estimatedDistance,
+            reviewSummary: place.reviewSummary,
+            reviewConfidence: place.reviewConfidence,
+            score: scoring.totalScore,
+            scoreBreakdown: scoring.scoreBreakdown,
+            reasons,
+            sources: {
+              primaryUrl: place.sourceUrl,
+              googleMapsUrl: mapSearchUrl,
+              yelpUrl: `https://www.yelp.com/search?find_desc=${encodeURIComponent(place.name)}&find_loc=${encodeURIComponent(location)}`,
+              webSearchUrl: `https://www.google.com/search?q=${encodeURIComponent(`${place.name} ${location} reviews`)}`,
+            },
+          } satisfies ScoutClinic;
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 6);
+
+      const bestMapClinic = rankedFromMap[0] || null;
+      const mapRecommendation = bestMapClinic
+        ? {
+            bestClinicId: bestMapClinic.id,
+            summary: `${bestMapClinic.name} is currently the strongest pick from live map results using your ranking profile (distance ${weightProfile.distance}%, reviews ${weightProfile.reviews}%, prominence ${weightProfile.prominence}%).`,
+            reasons: bestMapClinic.reasons,
+          }
+        : null;
+
+      return json(res, 200, {
+        query: mapQuery,
+        centerLabel: location,
+        mapEmbedUrl: `https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`,
+        sourceMode: "google-maps-live",
+        weightProfile,
+        items: rankedFromMap,
+        recommendation: mapRecommendation,
+      });
+    }
 
     const listingQuery = `${specialtyTerms[specialty]} near ${location}`;
     const listingUrl = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=16&q=${encodeURIComponent(
@@ -368,13 +710,11 @@ export default async function handler(req: any, res: any) {
         }
       : null;
 
-    const specialtyLabel = specialtyLabels[specialty];
-    const mapQuery = `${specialtyLabel} near ${location}`;
-
     return json(res, 200, {
       query: mapQuery,
       centerLabel: location,
       mapEmbedUrl: `https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`,
+      sourceMode: "nominatim-fallback",
       weightProfile,
       items: ranked,
       recommendation,
