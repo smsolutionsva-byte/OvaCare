@@ -326,6 +326,11 @@ const ReportTracker = () => {
               Add New Snapshot From Analyzer <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
             </Link>
           </Button>
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/copilot">
+              Open Care Copilot <Sparkles className="ml-1 h-3.5 w-3.5" />
+            </Link>
+          </Button>
           <Badge variant="secondary" className="gap-1">
             <FileStack className="h-3.5 w-3.5" /> {sortedSnapshots.length} snapshots
           </Badge>
@@ -400,6 +405,14 @@ const ReportTracker = () => {
               <p className="text-sm text-muted-foreground">Save at least two snapshots in Analyzer to unlock timeline charts.</p>
             ) : (
               <>
+                <div className="mb-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    This chart tracks the selected marker value across saved report dates.
+                  </div>
+                  <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    Dashed lines show reference bounds when available in extracted reports.
+                  </div>
+                </div>
                 <div className="mb-3 max-w-sm">
                   <Select value={selectedMarker} onValueChange={setSelectedMarker}>
                     <SelectTrigger>
@@ -485,42 +498,52 @@ const ReportTracker = () => {
             {outOfRangeTrend.length === 0 ? (
               <p className="text-sm text-muted-foreground">No trend yet. Save your first snapshot from Analyzer.</p>
             ) : (
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={outOfRangeTrend} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 12 }}
-                      label={{ value: "Report Date", position: "insideBottom", offset: -4, style: { fontSize: 11 } }}
-                    />
-                    <YAxis
-                      allowDecimals={false}
-                      tick={{ fontSize: 12 }}
-                      label={{ value: "Marker count", angle: -90, position: "insideLeft", style: { textAnchor: "middle", fontSize: 11 } }}
-                    />
-                    <Tooltip
-                      formatter={(value: number, name: string) => [Math.round(Number(value)), name]}
-                      labelFormatter={(label) => `Report date: ${label}`}
-                    />
-                    <Legend />
-                    <Area
-                      type="monotone"
-                      dataKey="outOfRange"
-                      stroke="#f97316"
-                      fill="#f9731633"
-                      name="Out-of-range markers (high + low)"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="total"
-                      stroke="#64748b"
-                      strokeWidth={2}
-                      dot={{ r: 2 }}
-                      name="Total extracted markers"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div>
+                <div className="mb-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    Orange area = number of out-of-range markers (high + low) in each report.
+                  </div>
+                  <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    Gray line = total extracted markers, to give denominator/context.
+                  </div>
+                </div>
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={outOfRangeTrend} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 12 }}
+                        label={{ value: "Report Date", position: "insideBottom", offset: -4, style: { fontSize: 11 } }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tick={{ fontSize: 12 }}
+                        label={{ value: "Marker count", angle: -90, position: "insideLeft", style: { textAnchor: "middle", fontSize: 11 } }}
+                      />
+                      <Tooltip
+                        formatter={(value: number, name: string) => [Math.round(Number(value)), name]}
+                        labelFormatter={(label) => `Report date: ${label}`}
+                      />
+                      <Legend />
+                      <Area
+                        type="monotone"
+                        dataKey="outOfRange"
+                        stroke="#f97316"
+                        fill="#f9731633"
+                        name="Out-of-range markers (high + low)"
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="total"
+                        stroke="#64748b"
+                        strokeWidth={2}
+                        dot={{ r: 2 }}
+                        name="Total extracted markers"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             )}
           </CardContent>

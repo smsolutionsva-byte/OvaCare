@@ -14,6 +14,7 @@ const Navbar = () => {
     { to: "/predict", label: "Risk Predictor" },
     { to: "/analyze", label: "Report Analyzer" },
     { to: "/tracker", label: "Report Tracker" },
+    { to: "/copilot", label: "Care Copilot" },
   ];
 
   return (

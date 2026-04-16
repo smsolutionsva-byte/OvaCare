@@ -9,6 +9,7 @@ import Landing from "@/pages/Landing";
 import Predict from "@/pages/Predict";
 import Analyze from "@/pages/Analyze";
 import ReportTracker from "@/pages/ReportTracker";
+import CareCopilot from "@/pages/CareCopilot";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import NotFound from "@/pages/NotFound";
@@ -28,6 +29,7 @@ const App = () => (
             <Route path="/predict" element={<Predict />} />
             <Route path="/analyze" element={<Analyze />} />
             <Route path="/tracker" element={<ReportTracker />} />
+            <Route path="/copilot" element={<CareCopilot />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="*" element={<NotFound />} />
