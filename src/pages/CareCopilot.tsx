@@ -1025,8 +1025,17 @@ const CareCopilot = () => {
         </div>
       </div>
 
+      {clinicScoutOpen && !toolsOpen && (
+        <button
+          type="button"
+          aria-label="Close clinic scout"
+          className="fixed inset-0 z-50 bg-black/80"
+          onClick={() => setClinicScoutOpen(false)}
+        />
+      )}
+
       {clinicScoutOpen && (
-        <div className="fixed left-3 top-20 z-30 w-[min(430px,calc(100vw-1.5rem))]">
+        <div className="fixed left-3 top-20 z-[60] w-[min(430px,calc(100vw-1.5rem))]">
           <Card className="max-h-[78vh] overflow-hidden border-primary/20 shadow-xl backdrop-blur">
             <CardHeader className="border-b border-border/70 bg-background/95 pb-3">
               <div className="flex items-center justify-between gap-2">
