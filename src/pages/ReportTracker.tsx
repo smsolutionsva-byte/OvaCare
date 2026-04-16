@@ -63,6 +63,30 @@ const deviationFromRange = (marker: LabMarker) => {
   return 0;
 };
 
+const buildCanonicalMarkerMap = (markers: LabMarker[]) => {
+  const map = new Map<string, { label: string; markers: LabMarker[] }>();
+
+  for (const marker of markers) {
+    const normalized = normalizeMarkerForMatch(marker.name);
+    if (!normalized) continue;
+
+    const resolvedKey = map.has(normalized)
+      ? normalized
+      : findClosestMarkerKey(normalized, [...map.keys()]) || normalized;
+
+    const existing = map.get(resolvedKey) || { label: marker.name, markers: [] };
+    existing.markers.push(marker);
+
+    if (marker.name.length < existing.label.length) {
+      existing.label = marker.name;
+    }
+
+    map.set(resolvedKey, existing);
+  }
+
+  return map;
+};
+
 const ReportTracker = () => {
   const { toast } = useToast();
   const { user, isConfigured } = useAuth();
@@ -185,32 +209,24 @@ const ReportTracker = () => {
       };
     }
 
-    const prevMap = new Map<string, LabMarker[]>();
+    const latestMap = buildCanonicalMarkerMap(latestSnapshot.markers);
+    const prevMap = buildCanonicalMarkerMap(previousSnapshot.markers);
 
-    for (const marker of previousSnapshot.markers) {
-      const key = normalizeMarkerForMatch(marker.name);
-      if (!key) continue;
-      const list = prevMap.get(key) || [];
-      list.push(marker);
-      prevMap.set(key, list);
-    }
+    const rows = [...latestMap.entries()]
+      .map(([latestKey, latestEntry]) => {
+        const resolvedPrevKey = prevMap.has(latestKey)
+          ? latestKey
+          : findClosestMarkerKey(latestKey, [...prevMap.keys()]);
 
-    const rows = latestSnapshot.markers
-      .map((current) => {
-        const currentKey = normalizeMarkerForMatch(current.name);
-        if (!currentKey) return null;
+        if (!resolvedPrevKey) return null;
 
-        const resolvedKey = prevMap.has(currentKey)
-          ? currentKey
-          : findClosestMarkerKey(currentKey, [...prevMap.keys()]);
+        const previousEntry = prevMap.get(resolvedPrevKey);
+        if (!previousEntry || previousEntry.markers.length === 0 || latestEntry.markers.length === 0) return null;
 
-        if (!resolvedKey) return null;
+        const current = latestEntry.markers[0];
 
-        const previousList = prevMap.get(resolvedKey) || [];
-        if (previousList.length === 0) return null;
-
-        // Prefer candidate with the closest value when multiple similarly named markers exist.
-        const previous = previousList.reduce((best, candidate) => {
+        // Prefer candidate with closest numeric value when multiple rows map to same canonical key.
+        const previous = previousEntry.markers.reduce((best, candidate) => {
           const bestDelta = Math.abs(best.value - current.value);
           const candidateDelta = Math.abs(candidate.value - current.value);
           return candidateDelta < bestDelta ? candidate : best;
@@ -228,7 +244,7 @@ const ReportTracker = () => {
         }
 
         return {
-          name: current.name,
+          name: latestEntry.label,
           delta,
           deltaPct,
           trend,

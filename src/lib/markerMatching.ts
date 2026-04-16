@@ -5,11 +5,42 @@ const TOKEN_REPLACEMENTS: Array<[RegExp, string]> = [
   [/neutrophil|neutrophi\b/gi, "neutrophil"],
   [/eosinophil|eosinophi\b/gi, "eosinophil"],
   [/basophil|basophi\b/gi, "basophil"],
+  [/packed\s*cell\s*volume|pcv/gi, "pcv"],
+  [/mean\s*corpuscular\s*volume|mcv/gi, "mcv"],
+  [/mean\s*corpuscular\s*hemoglobin\s*concentration|mchc/gi, "mchc"],
+  [/mean\s*corpuscular\s*hemoglobin|mch/gi, "mch"],
+  [/red\s*cell\s*distribution\s*width|rdw/gi, "rdw"],
+  [/total\s*leukocyte\s*count|tlc/gi, "tlc"],
+  [/differential\s*leukocyte\s*count|dlc/gi, "dlc"],
   [/thyroid\s*stimulating\s*hormone|tsh/gi, "tsh"],
   [/hb\s*a1c|hba1c/gi, "hba1c"],
   [/rbc\s*count|red\s*blood\s*cell\s*count/gi, "rbc count"],
   [/wbc\s*count|white\s*blood\s*cell\s*count/gi, "wbc count"],
 ];
+
+const PANEL_NOISE_PATTERNS = [
+  /\bcomplete\s*blood\s*count\b/gi,
+  /\bdifferential\s*leukocyte\s*count\b/gi,
+  /\babsolute\s*leukocyte\s*count\b/gi,
+  /\bbiological\s*reference\s*interval\b/gi,
+  /\breference\s*range\b/gi,
+  /\bresults?\b/gi,
+  /\bunits?\b/gi,
+  /\btest\s*name\b/gi,
+];
+
+const GENERIC_TOKENS = new Set([
+  "blood",
+  "serum",
+  "plasma",
+  "level",
+  "test",
+  "panel",
+  "result",
+  "results",
+  "units",
+  "count",
+]);
 
 const collapseSpaces = (value: string) => value.replace(/\s+/g, " ").trim();
 
@@ -18,6 +49,9 @@ const tokenize = (value: string) =>
     .split(" ")
     .map((token) => token.trim())
     .filter((token) => token.length > 1);
+
+const markerTokens = (value: string) =>
+  tokenize(value).filter((token) => !GENERIC_TOKENS.has(token));
 
 const levenshteinDistance = (a: string, b: string) => {
   if (a === b) return 0;
@@ -44,8 +78,11 @@ const levenshteinDistance = (a: string, b: string) => {
 };
 
 const tokenJaccard = (a: string, b: string) => {
-  const setA = new Set(tokenize(a));
-  const setB = new Set(tokenize(b));
+  const strongA = markerTokens(a);
+  const strongB = markerTokens(b);
+
+  const setA = new Set(strongA.length > 0 ? strongA : tokenize(a));
+  const setB = new Set(strongB.length > 0 ? strongB : tokenize(b));
 
   if (setA.size === 0 || setB.size === 0) return 0;
 
@@ -56,6 +93,23 @@ const tokenJaccard = (a: string, b: string) => {
 
   const union = setA.size + setB.size - intersection;
   return union > 0 ? intersection / union : 0;
+};
+
+const tokenOverlap = (a: string, b: string) => {
+  const strongA = markerTokens(a);
+  const strongB = markerTokens(b);
+
+  const setA = new Set(strongA.length > 0 ? strongA : tokenize(a));
+  const setB = new Set(strongB.length > 0 ? strongB : tokenize(b));
+
+  if (setA.size === 0 || setB.size === 0) return 0;
+
+  let intersection = 0;
+  for (const token of setA) {
+    if (setB.has(token)) intersection += 1;
+  }
+
+  return intersection / Math.min(setA.size, setB.size);
 };
 
 const stringSimilarity = (a: string, b: string) => {
@@ -69,6 +123,10 @@ export const normalizeMarkerForMatch = (value: string) => {
 
   for (const [pattern, replacement] of TOKEN_REPLACEMENTS) {
     normalized = normalized.replace(pattern, replacement);
+  }
+
+  for (const pattern of PANEL_NOISE_PATTERNS) {
+    normalized = normalized.replace(pattern, " ");
   }
 
   normalized = normalized
@@ -87,7 +145,12 @@ export const findClosestMarkerKey = (targetKey: string, existingKeys: string[]) 
   for (const candidate of existingKeys) {
     const lexical = stringSimilarity(targetKey, candidate);
     const semantic = tokenJaccard(targetKey, candidate);
-    const score = Math.max(lexical, semantic);
+    const overlap = tokenOverlap(targetKey, candidate);
+
+    const targetHasCandidate = targetKey.includes(candidate) || candidate.includes(targetKey);
+    const containmentBonus = targetHasCandidate ? 0.92 : 0;
+
+    const score = Math.max(lexical, semantic, overlap, containmentBonus);
 
     if (score > bestScore) {
       bestScore = score;
@@ -95,6 +158,6 @@ export const findClosestMarkerKey = (targetKey: string, existingKeys: string[]) 
     }
   }
 
-  // High threshold to avoid mismatching different markers.
-  return bestScore >= 0.86 ? bestKey : null;
+  // Keep conservative threshold but allow near matches with token overlap.
+  return bestScore >= 0.8 ? bestKey : null;
 };
