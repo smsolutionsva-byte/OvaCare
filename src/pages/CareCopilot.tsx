@@ -147,6 +147,26 @@ const rankingToClinicSpecialty = (specialty: RankedSpecialty): ClinicSpecialty |
   return specialty;
 };
 
+const makeStarterAssistantMessage = (): CareMessage => ({
+  id: makeLocalId(),
+  role: "assistant",
+  content:
+    "I am your Care Copilot. I can ask symptom follow-ups, track trend changes, run what-if planning, and help shortlist nearby specialists.",
+  createdAt: new Date().toISOString(),
+});
+
+const isPermissionDeniedError = (error: unknown) => {
+  if (!error || typeof error !== "object") return false;
+
+  const maybeCode = "code" in error ? String((error as { code?: unknown }).code || "") : "";
+  const maybeMessage = "message" in error ? String((error as { message?: unknown }).message || "") : "";
+
+  return (
+    maybeCode.toLowerCase().includes("permission-denied") ||
+    maybeMessage.toLowerCase().includes("missing or insufficient permissions")
+  );
+};
+
 const CareCopilot = () => {
   const { toast } = useToast();
   const { user, isConfigured } = useAuth();
@@ -264,28 +284,50 @@ const CareCopilot = () => {
     setLoadingData(true);
 
     try {
-      const [reportItems, chatItems] = await Promise.all([
+      const [reportResult, chatResult] = await Promise.allSettled([
         getReportSnapshots(user.uid),
         getCareMessages(user.uid),
       ]);
 
-      setSnapshots(reportItems);
-      if (chatItems.length > 0) {
-        setMessages(chatItems);
+      if (reportResult.status === "fulfilled") {
+        setSnapshots(reportResult.value);
       } else {
-        setMessages([
-          {
-            id: makeLocalId(),
-            role: "assistant",
-            content:
-              "I am your Care Copilot. I can ask symptom follow-ups, track trend changes, run what-if planning, and help shortlist nearby specialists.",
-            createdAt: new Date().toISOString(),
-          },
-        ]);
+        setSnapshots([]);
+      }
+
+      if (chatResult.status === "fulfilled" && chatResult.value.length > 0) {
+        setMessages(chatResult.value);
+      } else {
+        setMessages([makeStarterAssistantMessage()]);
+      }
+
+      const reportError = reportResult.status === "rejected" ? reportResult.reason : null;
+      const chatError = chatResult.status === "rejected" ? chatResult.reason : null;
+      const hasPermissionIssue = isPermissionDeniedError(reportError) || isPermissionDeniedError(chatError);
+
+      if (hasPermissionIssue) {
+        toast({
+          title: "Firestore rules needed",
+          description:
+            "Missing permissions for one or more collections. Add rules for users/{uid}/labReports and users/{uid}/careCopilotMessages.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (reportError || chatError) {
+        const message =
+          (reportError instanceof Error && reportError.message) ||
+          (chatError instanceof Error && chatError.message) ||
+          "Could not load full care copilot context.";
+
+        toast({ title: "Load warning", description: message, variant: "destructive" });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not load care copilot context.";
       toast({ title: "Load failed", description: message, variant: "destructive" });
+      setSnapshots([]);
+      setMessages([makeStarterAssistantMessage()]);
     } finally {
       setLoadingData(false);
     }

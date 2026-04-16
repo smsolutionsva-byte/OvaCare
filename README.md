@@ -91,13 +91,16 @@ Each snapshot stores:
 
 1. In Firebase Console, open Build -> Firestore Database.
 2. Create database in production mode (recommended) or test mode (temporary).
-3. Add security rules so users can only access their own report timeline:
+3. Add security rules so users can only access their own report timeline and copilot chat history:
 
 ```txt
 rules_version = '2';
 service cloud.firestore {
 	match /databases/{database}/documents {
 		match /users/{userId}/labReports/{reportId} {
+			allow read, write: if request.auth != null && request.auth.uid == userId;
+		}
+		match /users/{userId}/careCopilotMessages/{messageId} {
 			allow read, write: if request.auth != null && request.auth.uid == userId;
 		}
 	}
