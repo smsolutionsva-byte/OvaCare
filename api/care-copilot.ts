@@ -234,6 +234,32 @@ const detectRedFlags = (payload: CopilotPayload) => {
   };
 };
 
+const isEducationalInfoQuery = (message: string) => {
+  const normalized = (message || "").toLowerCase();
+
+  const hasInfoIntent =
+    /what\s+is|define|meaning\s+of|full\s+form\s+of|explain|overview|tell\s+me\s+about/i.test(normalized);
+  const hasConditionKeyword = /pcos|pcod|polycystic\s+ovary\s+syndrome/i.test(normalized);
+  const hasPersonalSignal =
+    /\b(my|i\s+have|i\s+am|me|mine)\b|symptom|period|cycle|pain|bleeding|acne|hair|weight|insulin|glucose|fertility|conceive/i.test(
+      normalized,
+    );
+
+  return hasInfoIntent && hasConditionKeyword && !hasPersonalSignal;
+};
+
+const shouldUseTrendBasedTriage = (message: string) => {
+  const normalized = (message || "").toLowerCase();
+  if (isEducationalInfoQuery(normalized)) return false;
+
+  return /\b(my|i\s+have|i\s+am|me|mine)\b|symptom|wors|period|cycle|pain|bleeding|acne|hair|weight|insulin|glucose|doctor|consult|fertility|plan/i.test(
+    normalized,
+  );
+};
+
+const educationalFallbackReply = () =>
+  "PCOS stands for Polycystic Ovary Syndrome. It is a common hormonal condition that can involve irregular periods, higher androgen symptoms (such as acne or excess hair growth), and metabolic changes like insulin resistance. It does not always mean ovarian cysts are present. If you want, I can also explain diagnosis criteria, common symptoms, and treatment pathways in simple steps.";
+
 const maxTriage = (
   a: CopilotResponse["triageLevel"],
   b: CopilotResponse["triageLevel"],
@@ -555,6 +581,8 @@ export default async function handler(req: any, res: any) {
     const payload = (body.payload || {}) as CopilotPayload;
     const refererHeader = req.headers?.origin || req.headers?.referer;
     const evidenceMode = payload.evidenceMode !== false;
+    const educationalQuery = isEducationalInfoQuery(payload.message || "");
+    const trendTriageEligible = shouldUseTrendBasedTriage(payload.message || "");
 
     if (!payload.message || typeof payload.message !== "string") {
       return res.status(400).json({ error: "Missing message payload." });
@@ -597,17 +625,26 @@ export default async function handler(req: any, res: any) {
     };
 
     const contextTriage: CopilotResponse["triageLevel"] =
-      payload.trackerContext?.riskSignal === "escalating" || payload.healthTwinContext?.latestLevel === "escalating"
+      trendTriageEligible &&
+      (payload.trackerContext?.riskSignal === "escalating" || payload.healthTwinContext?.latestLevel === "escalating")
         ? "soon"
         : "routine";
 
     if (!availability.groq && !availability.openrouter) {
       const fallbackResponse: CopilotResponse = {
-        reply: localContextFallback(payload),
+        reply: educationalQuery ? educationalFallbackReply() : localContextFallback(payload),
         followUpQuestions: [
-          "How have your cycle intervals changed in the last 3 months?",
-          "Which symptom has worsened most recently (acne, hair, fatigue, weight, mood)?",
-          "Would you like a doctor-ready follow-up checklist based on these trends?",
+          ...(educationalQuery
+            ? [
+                "Would you like a quick explanation of PCOS diagnosis criteria?",
+                "Do you want a beginner-friendly treatment overview (lifestyle + medical options)?",
+                "Should I explain when to consult a gynecologist versus endocrinologist?",
+              ]
+            : [
+                "How have your cycle intervals changed in the last 3 months?",
+                "Which symptom has worsened most recently (acne, hair, fatigue, weight, mood)?",
+                "Would you like a doctor-ready follow-up checklist based on these trends?",
+              ]),
         ],
         recommendedDoctorTypes: ["Gynecologist", "Endocrinologist"],
         specialistRankings,
@@ -617,7 +654,9 @@ export default async function handler(req: any, res: any) {
           "Book follow-up if symptoms are worsening or persistent.",
         ],
         triageLevel: contextTriage,
-        triageReason: "Triage derived from trend context because no AI provider key is configured.",
+        triageReason: educationalQuery
+          ? "Educational question detected without personal urgent symptom context."
+          : "Triage derived from trend context because no AI provider key is configured.",
         evidenceCards,
         nextBestTests,
         confidence: "medium",
@@ -640,11 +679,15 @@ export default async function handler(req: any, res: any) {
       try {
         const raw = await callProvider(candidate, payload, refererHeader);
         const normalized = normalizeOutput(raw);
-        const triageLevel = maxTriage(normalized.triageLevel, contextTriage);
+        const triageLevel = educationalQuery ? "routine" : maxTriage(normalized.triageLevel, contextTriage);
+        const triageReason = educationalQuery
+          ? "Educational question detected without personal urgent symptom context."
+          : normalized.triageReason;
 
         return res.status(200).json({
           ...normalized,
           triageLevel,
+          triageReason,
           specialistRankings,
           evidenceCards,
           nextBestTests,
@@ -657,10 +700,19 @@ export default async function handler(req: any, res: any) {
     }
 
     const fallbackResponse: CopilotResponse = {
-      reply: `${localContextFallback(payload)} AI services were temporarily unavailable, so this response used local safeguards.`,
+      reply: educationalQuery
+        ? `${educationalFallbackReply()} AI services were temporarily unavailable, so this response used local safeguards.`
+        : `${localContextFallback(payload)} AI services were temporarily unavailable, so this response used local safeguards.`,
       followUpQuestions: [
-        "Do you want a tighter follow-up plan for the next 30 days?",
-        "Should we prioritize hormonal or metabolic goals first?",
+        ...(educationalQuery
+          ? [
+              "Do you want a simple explanation of diagnosis and lab work for PCOS?",
+              "Should I compare common treatment tracks in plain language?",
+            ]
+          : [
+              "Do you want a tighter follow-up plan for the next 30 days?",
+              "Should we prioritize hormonal or metabolic goals first?",
+            ]),
       ],
       recommendedDoctorTypes: ["Gynecologist", "Endocrinologist"],
       specialistRankings,
@@ -670,7 +722,9 @@ export default async function handler(req: any, res: any) {
         "Carry your trend summary and report timeline to consultation.",
       ],
       triageLevel: contextTriage,
-      triageReason: "AI providers were unavailable; triage is based on deterministic trend rules.",
+      triageReason: educationalQuery
+        ? "Educational question detected without personal urgent symptom context."
+        : "AI providers were unavailable; triage is based on deterministic trend rules.",
       evidenceCards,
       nextBestTests,
       confidence: "medium",

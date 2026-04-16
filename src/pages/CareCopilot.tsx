@@ -164,22 +164,22 @@ const rankingToClinicSpecialty = (specialty: RankedSpecialty): ClinicSpecialty |
   return specialty;
 };
 
-const detectSuggestedTool = (response: CopilotApiResponse, userPrompt: string): ToolTab | null => {
-  const blend = `${response.reply} ${response.triageReason} ${userPrompt}`.toLowerCase();
+const detectPromptToolIntent = (userPrompt: string): ToolTab | null => {
+  const prompt = userPrompt.toLowerCase();
 
   if (
-    response.specialistRankings.length > 0 ||
-    response.nextBestTests.length > 0 ||
-    /doctor|clinic|specialist|nearby|fertility|endocrin/i.test(blend)
+    /which\s+(doctor|specialist)|what\s+doctor|better\s+doctor|doctor\s+to\s+consult|consult\s+(a\s+)?doctor|find\s+(a\s+)?doctor|specialist|clinic|nearby\s+doctor|doctor\s+finder/i.test(
+      prompt,
+    )
   ) {
     return "doctors";
   }
 
-  if (/what-if|plan|sleep|activity|diet|stress|lifestyle|30-day/i.test(blend)) {
+  if (/what[-\s]?if|simulation|planner|plan\s+my|lifestyle\s+plan|sleep\s+plan|diet\s+plan|stress\s+plan/i.test(prompt)) {
     return "whatif";
   }
 
-  if (/drift|trend|timeline|marker|worsen|health twin/i.test(blend)) {
+  if (/health\s*twin|drift|trend|timeline|marker\s+trend|worsening\s+marker|report\s+trend/i.test(prompt)) {
     return "twin";
   }
 
@@ -459,11 +459,13 @@ const CareCopilot = () => {
       const json = (await response.json()) as CopilotApiResponse;
       setLatestCopilotResponse(json);
 
-      const autoTool = detectSuggestedTool(json, text);
-      if (autoTool) {
-        setSuggestedTool(autoTool);
-        setActiveToolTab(autoTool);
+      const promptToolIntent = detectPromptToolIntent(text);
+      if (promptToolIntent) {
+        setSuggestedTool(promptToolIntent);
+        setActiveToolTab(promptToolIntent);
         setToolsOpen(true);
+      } else {
+        setSuggestedTool(null);
       }
 
       const triagePrefix =
@@ -516,15 +518,13 @@ const CareCopilot = () => {
         nextBestTests: [],
       });
 
-      if (/trend|marker|worse|worsen|report/i.test(text)) {
-        setSuggestedTool("twin");
-        setActiveToolTab("twin");
-      } else if (/doctor|specialist|clinic|nearby/i.test(text)) {
-        setSuggestedTool("doctors");
-        setActiveToolTab("doctors");
-      } else if (/sleep|activity|diet|stress|what-if|plan/i.test(text)) {
-        setSuggestedTool("whatif");
-        setActiveToolTab("whatif");
+      const promptToolIntent = detectPromptToolIntent(text);
+      if (promptToolIntent) {
+        setSuggestedTool(promptToolIntent);
+        setActiveToolTab(promptToolIntent);
+        setToolsOpen(true);
+      } else {
+        setSuggestedTool(null);
       }
 
       const fallbackMessage: CareMessage = {
