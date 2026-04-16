@@ -11,6 +11,7 @@ import {
   Mic,
   SendHorizonal,
   ShieldAlert,
+  SlidersHorizontal,
   Sparkles,
   Stethoscope,
   Volume2,
@@ -42,6 +43,14 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
@@ -64,6 +73,8 @@ import { getReportSnapshots, type ReportSnapshot } from "@/lib/reportTracker";
 import { simulateWhatIfPlan } from "@/lib/whatIfSimulator";
 
 type Provider = "groq" | "openrouter";
+
+type ToolTab = "whatif" | "doctors" | "twin";
 
 type RankedSpecialty = "gynecologist" | "endocrinologist" | "fertility" | "dermatologist" | "nutrition" | "emergency";
 
@@ -133,6 +144,12 @@ const providerLabelMap: Record<Provider, string> = {
   openrouter: "OvaCare Model 1.21",
 };
 
+const toolTabLabelMap: Record<ToolTab, string> = {
+  whatif: "What-if Planner",
+  doctors: "Doctor Finder",
+  twin: "Health Twin",
+};
+
 const rankedSpecialtyLabelMap: Record<RankedSpecialty, string> = {
   gynecologist: "Gynecologist",
   endocrinologist: "Endocrinologist",
@@ -145,6 +162,28 @@ const rankedSpecialtyLabelMap: Record<RankedSpecialty, string> = {
 const rankingToClinicSpecialty = (specialty: RankedSpecialty): ClinicSpecialty | null => {
   if (specialty === "emergency") return null;
   return specialty;
+};
+
+const detectSuggestedTool = (response: CopilotApiResponse, userPrompt: string): ToolTab | null => {
+  const blend = `${response.reply} ${response.triageReason} ${userPrompt}`.toLowerCase();
+
+  if (
+    response.specialistRankings.length > 0 ||
+    response.nextBestTests.length > 0 ||
+    /doctor|clinic|specialist|nearby|fertility|endocrin/i.test(blend)
+  ) {
+    return "doctors";
+  }
+
+  if (/what-if|plan|sleep|activity|diet|stress|lifestyle|30-day/i.test(blend)) {
+    return "whatif";
+  }
+
+  if (/drift|trend|timeline|marker|worsen|health twin/i.test(blend)) {
+    return "twin";
+  }
+
+  return null;
 };
 
 const makeStarterAssistantMessage = (): CareMessage => ({
@@ -181,6 +220,9 @@ const CareCopilot = () => {
   const [loadingData, setLoadingData] = useState(false);
   const [sending, setSending] = useState(false);
   const [latestCopilotResponse, setLatestCopilotResponse] = useState<CopilotApiResponse | null>(null);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [activeToolTab, setActiveToolTab] = useState<ToolTab>("whatif");
+  const [suggestedTool, setSuggestedTool] = useState<ToolTab | null>(null);
 
   const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([]);
 
@@ -200,6 +242,7 @@ const CareCopilot = () => {
 
   const mapRootRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
 
   const trackerContext = useMemo(() => buildTrackerContext(snapshots), [snapshots]);
   const healthTwin = useMemo(() => buildHealthTwin(snapshots), [snapshots]);
@@ -260,6 +303,10 @@ const CareCopilot = () => {
     setBaselineRisk(score);
     setSimInitialized(true);
   }, [simInitialized, snapshots]);
+
+  useEffect(() => {
+    messageEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, sending]);
 
   const speakText = useCallback((text: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
@@ -412,6 +459,13 @@ const CareCopilot = () => {
       const json = (await response.json()) as CopilotApiResponse;
       setLatestCopilotResponse(json);
 
+      const autoTool = detectSuggestedTool(json, text);
+      if (autoTool) {
+        setSuggestedTool(autoTool);
+        setActiveToolTab(autoTool);
+        setToolsOpen(true);
+      }
+
       const triagePrefix =
         json.triageLevel === "urgent"
           ? "Urgency: Urgent. "
@@ -461,6 +515,17 @@ const CareCopilot = () => {
         evidenceCards: [],
         nextBestTests: [],
       });
+
+      if (/trend|marker|worse|worsen|report/i.test(text)) {
+        setSuggestedTool("twin");
+        setActiveToolTab("twin");
+      } else if (/doctor|specialist|clinic|nearby/i.test(text)) {
+        setSuggestedTool("doctors");
+        setActiveToolTab("doctors");
+      } else if (/sleep|activity|diet|stress|what-if|plan/i.test(text)) {
+        setSuggestedTool("whatif");
+        setActiveToolTab("whatif");
+      }
 
       const fallbackMessage: CareMessage = {
         id: makeLocalId(),
@@ -727,133 +792,120 @@ const CareCopilot = () => {
   }
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-10">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-bold text-foreground md:text-3xl">Care Copilot</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Conversational guidance with report-aware memory, what-if simulation, voice responses, and local specialist finder.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Badge variant="secondary">Trend signal: {trackerContext.riskSignal}</Badge>
-          <Button variant="outline" asChild>
-            <Link to="/tracker">Open Tracker</Link>
-          </Button>
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-        <Card className="overflow-hidden">
-          <CardHeader className="pb-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-base">AI Chat With Memory</CardTitle>
-                <CardDescription>
-                  Copilot references report trends and your simulation settings while replying.
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                <Select value={provider} onValueChange={(value) => setProvider(value as Provider)}>
-                  <SelectTrigger className="w-44">
-                    <SelectValue placeholder="AI provider" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="groq">{providerLabelMap.groq}</SelectItem>
-                    <SelectItem value="openrouter">{providerLabelMap.openrouter}</SelectItem>
-                  </SelectContent>
-                </Select>
-                <div className="flex items-center gap-2 rounded-lg border border-border px-2 py-1.5">
-                  <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" />
-                  <Switch checked={evidenceMode} onCheckedChange={setEvidenceMode} />
-                </div>
-                <div className="flex items-center gap-2 rounded-lg border border-border px-2 py-1.5">
-                  <Mic className="h-3.5 w-3.5 text-muted-foreground" />
-                  <Switch checked={autoSpeak} onCheckedChange={setAutoSpeak} />
-                </div>
-              </div>
+    <div className="relative min-h-[calc(100vh-4.5rem)] bg-gradient-to-b from-background via-background to-muted/30">
+      <div className="mx-auto flex w-full max-w-5xl flex-col px-4 pb-24 pt-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="font-heading text-2xl font-bold text-foreground md:text-3xl">Care Copilot</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A focused conversation surface. Smart tools stay tucked away until needed.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Trend: {trackerContext.riskSignal}</Badge>
+            <Select value={provider} onValueChange={(value) => setProvider(value as Provider)}>
+              <SelectTrigger className="h-8 w-44">
+                <SelectValue placeholder="AI provider" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="groq">{providerLabelMap.groq}</SelectItem>
+                <SelectItem value="openrouter">{providerLabelMap.openrouter}</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="flex items-center gap-2 rounded-md border border-border px-2 py-1">
+              <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" />
+              <Switch checked={evidenceMode} onCheckedChange={setEvidenceMode} />
             </div>
-          </CardHeader>
+            <div className="flex items-center gap-2 rounded-md border border-border px-2 py-1">
+              <Mic className="h-3.5 w-3.5 text-muted-foreground" />
+              <Switch checked={autoSpeak} onCheckedChange={setAutoSpeak} />
+            </div>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/tracker">Tracker</Link>
+            </Button>
+          </div>
+        </div>
 
-          <CardContent className="space-y-3">
-            <ScrollArea className="h-[430px] rounded-xl border border-border bg-background p-3">
-              <div className="space-y-3">
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/50 shadow-sm backdrop-blur">
+          <div className="flex h-[72vh] flex-col">
+            <ScrollArea className="flex-1 px-3 py-4 md:px-6">
+              <div className="space-y-5">
                 {loadingData ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" /> Loading conversation and report context...
                   </div>
                 ) : (
                   messages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={`flex ${message.role === "assistant" ? "justify-start" : "justify-end"}`}
-                    >
-                      <div
-                        className={`max-w-[90%] rounded-xl border px-3 py-2 text-sm ${
-                          message.role === "assistant"
-                            ? "border-border bg-card text-foreground"
-                            : "border-primary/30 bg-primary/10 text-foreground"
-                        }`}
-                      >
-                        <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
-                        <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                          <span>{formatMessageTime(message.createdAt)}</span>
-                          {message.role === "assistant" && (
-                            <button
-                              type="button"
-                              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted"
-                              onClick={() => speakText(message.content)}
-                            >
-                              <Volume2 className="h-3.5 w-3.5" /> Speak
-                            </button>
-                          )}
+                    <div key={message.id} className={`flex ${message.role === "assistant" ? "justify-start" : "justify-end"}`}>
+                      <div className="flex max-w-[92%] items-start gap-2 md:max-w-[85%]">
+                        {message.role === "assistant" ? (
+                          <div className="mt-1 rounded-full border border-border bg-background p-1.5">
+                            <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+                          </div>
+                        ) : null}
+                        <div
+                          className={`rounded-2xl border px-3 py-2 text-sm leading-relaxed ${
+                            message.role === "assistant"
+                              ? "border-border bg-background text-foreground"
+                              : "border-primary/30 bg-primary/10 text-foreground"
+                          }`}
+                        >
+                          <p className="whitespace-pre-wrap">{message.content}</p>
+                          <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                            <span>{formatMessageTime(message.createdAt)}</span>
+                            {message.role === "assistant" && (
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted"
+                                onClick={() => speakText(message.content)}
+                              >
+                                <Volume2 className="h-3.5 w-3.5" /> Speak
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
                   ))
                 )}
+                <div ref={messageEndRef} />
               </div>
             </ScrollArea>
 
-            <div className="grid gap-2">
-              <Label htmlFor="care-chat">Ask anything about symptoms, reports, next steps, or doctor type.</Label>
-              <Textarea
-                id="care-chat"
-                value={chatInput}
-                onChange={(event) => setChatInput(event.target.value)}
-                placeholder="Example: My cycle is more irregular and insulin marker got worse. Which specialist should I see first?"
-                rows={3}
-              />
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  className="gradient-primary border-0"
-                  onClick={() => void handleSubmitChat()}
-                  disabled={sending || !chatInput.trim()}
-                >
-                  {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />} Send
-                </Button>
-                <Button variant="outline" onClick={copyVisitBrief}>
-                  <Copy className="mr-1 h-4 w-4" /> Copy visit brief
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setMessages((prev) => prev.slice(-4))}
-                  title="Keeps only last few messages locally"
-                >
-                  Keep recent chat only
-                </Button>
+            {latestCopilotResponse && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+                <Badge variant={latestCopilotResponse.triageLevel === "urgent" ? "destructive" : "secondary"}>
+                  Triage: {latestCopilotResponse.triageLevel}
+                </Badge>
+                <Badge variant="outline">Confidence: {latestCopilotResponse.confidence}</Badge>
+                {latestCopilotResponse.providerUsed && (
+                  <Badge variant="outline">{providerLabelMap[latestCopilotResponse.providerUsed]}</Badge>
+                )}
+                {suggestedTool && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7"
+                    onClick={() => {
+                      setActiveToolTab(suggestedTool);
+                      setToolsOpen(true);
+                    }}
+                  >
+                    <Sparkles className="mr-1 h-3.5 w-3.5" /> AI suggests {toolTabLabelMap[suggestedTool]}
+                  </Button>
+                )}
               </div>
-            </div>
+            )}
 
-            <div className="grid gap-2">
-              <p className="text-xs text-muted-foreground">Quick tools</p>
-              <div className="flex flex-wrap gap-2">
+            <div className="border-t border-border bg-background/95 p-3 md:p-4">
+              <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
                 {quickPrompts.map((prompt) => (
                   <Button
                     key={prompt}
                     type="button"
                     size="sm"
                     variant="secondary"
+                    className="shrink-0"
                     onClick={() => void sendMessage(prompt)}
                     disabled={sending}
                   >
@@ -861,410 +913,373 @@ const CareCopilot = () => {
                   </Button>
                 ))}
               </div>
-            </div>
 
-            {latestCopilotResponse && (
+              <div className="rounded-2xl border border-border bg-background p-2">
+                <Label htmlFor="care-chat" className="sr-only">Chat prompt</Label>
+                <Textarea
+                  id="care-chat"
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  placeholder="Ask about symptoms, reports, or next steps..."
+                  rows={3}
+                  className="min-h-[92px] resize-none border-0 bg-transparent px-2 py-2 focus-visible:ring-0"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1 pb-1">
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" onClick={copyVisitBrief}>
+                      <Copy className="mr-1 h-4 w-4" /> Visit brief
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setMessages((prev) => prev.slice(-4))}
+                      title="Keeps only last few messages locally"
+                    >
+                      Keep recent
+                    </Button>
+                  </div>
+                  <Button
+                    className="gradient-primary border-0"
+                    onClick={() => void handleSubmitChat()}
+                    disabled={sending || !chatInput.trim()}
+                  >
+                    {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />} Send
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <Sheet open={toolsOpen} onOpenChange={setToolsOpen}>
+        <SheetTrigger asChild>
+          <Button
+            className="fixed bottom-6 right-6 z-40 h-11 rounded-full px-4 shadow-lg"
+            variant="secondary"
+          >
+            <SlidersHorizontal className="mr-2 h-4 w-4" /> Tools
+          </Button>
+        </SheetTrigger>
+
+        <SheetContent side="right" className="w-full overflow-y-auto px-5 sm:max-w-2xl">
+          <SheetHeader className="pr-8">
+            <SheetTitle>Smart Tools</SheetTitle>
+            <SheetDescription>
+              Hidden by default for a clean chat-first interface. Open only when needed.
+            </SheetDescription>
+          </SheetHeader>
+
+          {latestCopilotResponse && (
+            <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3">
+              <p className="text-xs font-semibold text-foreground">Latest copilot actions</p>
+              <p className="mt-1 text-xs text-muted-foreground">{latestCopilotResponse.triageReason}</p>
+              {latestCopilotResponse.specialistRankings.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {latestCopilotResponse.specialistRankings.slice(0, 3).map((item) => (
+                    <Badge key={`${item.specialty}-${item.score}`} variant="outline">
+                      {rankedSpecialtyLabelMap[item.specialty]} {item.score.toFixed(1)}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {suggestedTool && (
+            <div className="mt-3 rounded-md border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-foreground">
+              AI auto-suggested tool: <span className="font-semibold">{toolTabLabelMap[suggestedTool]}</span>
+            </div>
+          )}
+
+          <Tabs value={activeToolTab} onValueChange={(value) => setActiveToolTab(value as ToolTab)} className="mt-4 w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="whatif">What-if Planner</TabsTrigger>
+              <TabsTrigger value="doctors">Doctor Finder</TabsTrigger>
+              <TabsTrigger value="twin">Health Twin</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="whatif" className="space-y-4 pt-2">
+              <div>
+                <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Baseline risk</span>
+                  <span>{baselineRisk}</span>
+                </div>
+                <Slider value={[baselineRisk]} onValueChange={(values) => setBaselineRisk(values[0])} min={0} max={100} step={1} />
+              </div>
+
+              <div>
+                <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Sleep (hours/night)</span>
+                  <span>{sleepHours.toFixed(1)}h</span>
+                </div>
+                <Slider value={[sleepHours]} onValueChange={(values) => setSleepHours(values[0])} min={4} max={10} step={0.5} />
+              </div>
+
+              <div>
+                <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Activity (minutes/day)</span>
+                  <span>{activityMinutes} min</span>
+                </div>
+                <Slider value={[activityMinutes]} onValueChange={(values) => setActivityMinutes(values[0])} min={0} max={90} step={5} />
+              </div>
+
+              <div>
+                <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Diet quality</span>
+                  <span>{dietQuality}/10</span>
+                </div>
+                <Slider value={[dietQuality]} onValueChange={(values) => setDietQuality(values[0])} min={1} max={10} step={1} />
+              </div>
+
+              <div>
+                <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Stress level</span>
+                  <span>{stressLevel}/10</span>
+                </div>
+                <Slider value={[stressLevel]} onValueChange={(values) => setStressLevel(values[0])} min={1} max={10} step={1} />
+              </div>
+
               <div className="rounded-lg border border-border bg-muted/30 p-3">
-                <p className="text-xs font-medium text-foreground">Latest copilot actions</p>
-                {latestCopilotResponse.triageLevel === "urgent" && (
-                  <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    <p className="font-semibold">Urgent triage warning</p>
-                    <p className="mt-1">{latestCopilotResponse.triageReason}</p>
-                  </div>
-                )}
-                {latestCopilotResponse.triageLevel !== "urgent" && (
-                  <div className="mt-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">Triage reason: </span>
-                    {latestCopilotResponse.triageReason}
-                  </div>
-                )}
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Checklist</p>
-                    <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
-                      {latestCopilotResponse.actionChecklist.map((item) => (
-                        <li key={item}>- {item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Doctor types</p>
-                    <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
-                      {latestCopilotResponse.recommendedDoctorTypes.map((item) => (
-                        <li key={item}>- {item}</li>
-                      ))}
-                    </ul>
-                  </div>
+                <p className="text-sm font-semibold text-foreground">
+                  Projected risk: {simulationResult.projectedRisk}
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    ({simulationResult.delta >= 0 ? "+" : ""}{simulationResult.delta})
+                  </span>
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">Band: {simulationResult.riskBand}</p>
+                <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  {simulationResult.explanation.map((line) => (
+                    <li key={line}>- {line}</li>
+                  ))}
+                </ul>
+                <Button
+                  className="mt-3 w-full"
+                  variant="outline"
+                  onClick={() =>
+                    void sendMessage(
+                      `Use this what-if scenario to build a practical 30-day plan. Baseline risk ${baselineRisk}, projected ${simulationResult.projectedRisk}, sleep ${sleepHours}h, activity ${activityMinutes} min/day, diet quality ${dietQuality}/10, stress ${stressLevel}/10.`,
+                    )
+                  }
+                  disabled={sending}
+                >
+                  Send Scenario to Copilot
+                </Button>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="doctors" className="space-y-4 pt-2">
+              <div className="space-y-2">
+                <Label htmlFor="clinic-location">City or area</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="clinic-location"
+                    placeholder="Example: Hyderabad"
+                    value={location}
+                    onChange={(event) => setLocation(event.target.value)}
+                  />
+                  <Button variant="outline" onClick={handleUseCurrentLocation} disabled={locationBusy}>
+                    {locationBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LocateFixed className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Specialist type</Label>
+                <Select value={specialty} onValueChange={(value) => setSpecialty(value as ClinicSpecialty)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose specialty" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="gynecologist">Gynecologist</SelectItem>
+                    <SelectItem value="endocrinologist">Endocrinologist</SelectItem>
+                    <SelectItem value="fertility">Fertility specialist</SelectItem>
+                    <SelectItem value="dermatologist">Dermatologist</SelectItem>
+                    <SelectItem value="nutrition">Nutrition specialist</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <div className="flex items-center justify-between rounded-md border border-border bg-muted/20 px-3 py-2">
+                  <p className="text-xs text-muted-foreground">Auto-use copilot ranked specialist before search</p>
+                  <Switch checked={autoApplySpecialistPriority} onCheckedChange={setAutoApplySpecialistPriority} />
                 </div>
 
-                {latestCopilotResponse.specialistRankings.length > 0 && (
-                  <div className="mt-3 rounded-md border border-border bg-background p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Specialist Priority</p>
-                    <div className="mt-2 space-y-2">
-                      {latestCopilotResponse.specialistRankings.slice(0, 4).map((item) => (
-                        <div key={`${item.specialty}-${item.score}`} className="rounded border border-border px-2 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs font-semibold text-foreground">{rankedSpecialtyLabelMap[item.specialty]}</p>
-                            <Badge variant="outline">score {item.score.toFixed(1)}</Badge>
-                          </div>
-                          <ul className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
-                            {item.reasons.slice(0, 2).map((reason) => (
-                              <li key={reason}>- {reason}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {latestCopilotResponse.nextBestTests.length > 0 && (
-                  <div className="mt-3 rounded-md border border-border bg-background p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Next Best Tests</p>
-                    <div className="mt-2 space-y-2">
-                      {latestCopilotResponse.nextBestTests.map((test) => (
-                        <div key={test.testName} className="rounded border border-border px-2 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs font-semibold text-foreground">{test.testName}</p>
-                            <Badge variant={test.urgency === "soon" ? "destructive" : "outline"}>
-                              {test.urgency}
-                            </Badge>
-                          </div>
-                          <p className="mt-1 text-xs text-muted-foreground">{test.reason}</p>
-                          <p className="mt-1 text-[11px] text-muted-foreground">Specialist: {test.specialist}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {latestCopilotResponse.evidenceCards.length > 0 && (
-                  <div className="mt-3 rounded-md border border-border bg-background p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Evidence Sources</p>
-                    <div className="mt-2 space-y-2">
-                      {latestCopilotResponse.evidenceCards.map((card) => (
-                        <div key={card.url} className="rounded border border-border px-2 py-2">
-                          <a
-                            href={card.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs font-semibold text-primary underline-offset-2 hover:underline"
-                          >
-                            {card.title}
-                          </a>
-                          <p className="mt-0.5 text-[11px] text-muted-foreground">{card.source}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">{card.snippet}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Smart Tools</CardTitle>
-              <CardDescription>
-                Run what-if planning and discover nearby specialists on a map.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Tabs defaultValue="whatif" className="w-full">
-                <TabsList className="grid w-full grid-cols-3">
-                  <TabsTrigger value="whatif">What-if Planner</TabsTrigger>
-                  <TabsTrigger value="doctors">Doctor Finder</TabsTrigger>
-                  <TabsTrigger value="twin">Health Twin</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="whatif" className="space-y-4 pt-2">
-                  <div>
-                    <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Baseline risk</span>
-                      <span>{baselineRisk}</span>
-                    </div>
-                    <Slider value={[baselineRisk]} onValueChange={(values) => setBaselineRisk(values[0])} min={0} max={100} step={1} />
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Sleep (hours/night)</span>
-                      <span>{sleepHours.toFixed(1)}h</span>
-                    </div>
-                    <Slider value={[sleepHours]} onValueChange={(values) => setSleepHours(values[0])} min={4} max={10} step={0.5} />
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Activity (minutes/day)</span>
-                      <span>{activityMinutes} min</span>
-                    </div>
-                    <Slider value={[activityMinutes]} onValueChange={(values) => setActivityMinutes(values[0])} min={0} max={90} step={5} />
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Diet quality</span>
-                      <span>{dietQuality}/10</span>
-                    </div>
-                    <Slider value={[dietQuality]} onValueChange={(values) => setDietQuality(values[0])} min={1} max={10} step={1} />
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Stress level</span>
-                      <span>{stressLevel}/10</span>
-                    </div>
-                    <Slider value={[stressLevel]} onValueChange={(values) => setStressLevel(values[0])} min={1} max={10} step={1} />
-                  </div>
-
-                  <div className="rounded-lg border border-border bg-muted/30 p-3">
-                    <p className="text-sm font-semibold text-foreground">
-                      Projected risk: {simulationResult.projectedRisk}
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        ({simulationResult.delta >= 0 ? "+" : ""}{simulationResult.delta})
-                      </span>
+                {topMapCompatibleSpecialty && latestCopilotResponse?.specialistRankings?.length ? (
+                  <div className="rounded-md border border-border bg-background px-3 py-2">
+                    <p className="text-xs text-muted-foreground">
+                      Top recommended: <span className="font-medium text-foreground">{specialtyLabelMap[topMapCompatibleSpecialty]}</span>
                     </p>
-                    <p className="mt-1 text-xs text-muted-foreground">Band: {simulationResult.riskBand}</p>
-                    <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                      {simulationResult.explanation.map((line) => (
-                        <li key={line}>- {line}</li>
-                      ))}
-                    </ul>
-                    <Button
-                      className="mt-3 w-full"
-                      variant="outline"
-                      onClick={() =>
-                        void sendMessage(
-                          `Use this what-if scenario to build a practical 30-day plan. Baseline risk ${baselineRisk}, projected ${simulationResult.projectedRisk}, sleep ${sleepHours}h, activity ${activityMinutes} min/day, diet quality ${dietQuality}/10, stress ${stressLevel}/10.`,
-                        )
-                      }
-                      disabled={sending}
-                    >
-                      Send Scenario to Copilot
-                    </Button>
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="doctors" className="space-y-4 pt-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="clinic-location">City or area</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="clinic-location"
-                        placeholder="Example: Hyderabad"
-                        value={location}
-                        onChange={(event) => setLocation(event.target.value)}
-                      />
-                      <Button variant="outline" onClick={handleUseCurrentLocation} disabled={locationBusy}>
-                        {locationBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LocateFixed className="h-4 w-4" />}
+                    <div className="mt-2 flex gap-2">
+                      <Button size="sm" variant="outline" onClick={() => setSpecialty(topMapCompatibleSpecialty)}>
+                        Apply Recommendation
                       </Button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Specialist type</Label>
-                    <Select value={specialty} onValueChange={(value) => setSpecialty(value as ClinicSpecialty)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Choose specialty" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="gynecologist">Gynecologist</SelectItem>
-                        <SelectItem value="endocrinologist">Endocrinologist</SelectItem>
-                        <SelectItem value="fertility">Fertility specialist</SelectItem>
-                        <SelectItem value="dermatologist">Dermatologist</SelectItem>
-                        <SelectItem value="nutrition">Nutrition specialist</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <div className="flex items-center justify-between rounded-md border border-border bg-muted/20 px-3 py-2">
-                      <p className="text-xs text-muted-foreground">Auto-use copilot ranked specialist before search</p>
-                      <Switch checked={autoApplySpecialistPriority} onCheckedChange={setAutoApplySpecialistPriority} />
-                    </div>
-
-                    {topMapCompatibleSpecialty && latestCopilotResponse?.specialistRankings?.length ? (
-                      <div className="rounded-md border border-border bg-background px-3 py-2">
-                        <p className="text-xs text-muted-foreground">
-                          Top recommended: <span className="font-medium text-foreground">{specialtyLabelMap[topMapCompatibleSpecialty]}</span>
-                        </p>
-                        <div className="mt-2 flex gap-2">
-                          <Button size="sm" variant="outline" onClick={() => setSpecialty(topMapCompatibleSpecialty)}>
-                            Apply Recommendation
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() =>
-                              void sendMessage(
-                                `Explain why ${specialtyLabelMap[topMapCompatibleSpecialty]} is currently prioritized for my case and what to ask in first visit.`,
-                              )
-                            }
-                            disabled={sending}
-                          >
-                            Why this?
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="flex gap-2">
-                    <Button className="gradient-primary w-full border-0" onClick={handleFindClinics} disabled={searchingClinics}>
-                      {searchingClinics ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />} Find Clinics
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() =>
-                        void sendMessage(
-                          `Based on my trend signal (${trackerContext.riskSignal}) and latest context, which specialist should I prioritize first: gynecologist, endocrinologist, fertility specialist, dermatologist, or nutrition specialist?`,
-                        )
-                      }
-                      disabled={sending}
-                    >
-                      <Stethoscope className="h-4 w-4" />
-                    </Button>
-                  </div>
-
-                  {mapError && <p className="text-xs text-destructive">{mapError}</p>}
-
-                  <div className="h-64 overflow-hidden rounded-xl border border-border bg-muted/20">
-                    {clinics.length === 0 ? (
-                      <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
-                        Search a city and specialty to render clinics on map.
-                      </div>
-                    ) : (
-                      <div ref={mapRootRef} className="h-full w-full" />
-                    )}
-                  </div>
-
-                  <div className="max-h-64 space-y-2 overflow-auto pr-1">
-                    {clinics.map((clinic) => (
-                      <div key={clinic.id} className="rounded-lg border border-border bg-background p-3">
-                        <p className="text-sm font-medium text-foreground">{clinic.name}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">{clinic.address}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">Type: {clinic.type}</p>
-                        <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                          {clinic.whyGood.map((reason) => (
-                            <li key={reason}>- {reason}</li>
-                          ))}
-                        </ul>
-                        <div className="mt-2 flex items-center justify-between gap-2">
-                          <a
-                            href={clinic.sourceUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs font-medium text-primary underline-offset-2 hover:underline"
-                          >
-                            Open in map source
-                          </a>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              void sendMessage(
-                                `I found this ${specialtyLabelMap[specialty]} option: ${clinic.name} at ${clinic.address}. Help me ask smart screening questions before booking.`,
-                              )
-                            }
-                            disabled={sending}
-                          >
-                            <Bot className="mr-1 h-3.5 w-3.5" /> Ask Copilot
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="twin" className="space-y-4 pt-2">
-                  {healthTwinChartData.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      Save at least two report snapshots in Analyzer to unlock health twin drift analytics.
-                    </p>
-                  ) : (
-                    <>
-                      <div className="rounded-lg border border-border bg-muted/30 p-3">
-                        <p className="text-xs font-semibold text-foreground">Current Twin Level: {healthTwin.latestLevel}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">{healthTwin.summary}</p>
-                      </div>
-
-                      <div className="h-52 rounded-lg border border-border bg-background p-2">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={healthTwinChartData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="dateLabel" tick={{ fontSize: 11 }} />
-                            <YAxis tick={{ fontSize: 11 }} />
-                            <Tooltip />
-                            <Legend wrapperStyle={{ fontSize: 11 }} />
-                            <Line type="monotone" dataKey="driftScore" stroke="#0ea5e9" strokeWidth={2.2} name="Drift score" />
-                            <Line type="monotone" dataKey="outOfRange" stroke="#f97316" strokeWidth={1.8} name="Out-of-range" />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-
-                      <div className="h-52 rounded-lg border border-border bg-background p-2">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={healthTwinChartData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="dateLabel" tick={{ fontSize: 11 }} />
-                            <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                            <Tooltip />
-                            <Legend wrapperStyle={{ fontSize: 11 }} />
-                            <Area type="monotone" dataKey="hormonalAbnormal" stroke="#ef4444" fill="#ef444433" name="Hormonal abnormal" />
-                            <Area type="monotone" dataKey="metabolicAbnormal" stroke="#8b5cf6" fill="#8b5cf633" name="Metabolic abnormal" />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-
-                      <div className="space-y-2 rounded-lg border border-border bg-background p-3">
-                        <p className="text-xs font-semibold text-foreground">Drift Alerts</p>
-                        {healthTwin.driftAlerts.map((alert) => (
-                          <div key={alert} className="flex items-start gap-2 text-xs text-muted-foreground">
-                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 text-amber-500" />
-                            <span>{alert}</span>
-                          </div>
-                        ))}
-                      </div>
-
                       <Button
-                        variant="outline"
-                        className="w-full"
+                        size="sm"
+                        variant="ghost"
                         onClick={() =>
                           void sendMessage(
-                            `Use my Health Twin drift summary to prioritize care: ${healthTwin.summary}. Alerts: ${healthTwin.driftAlerts.join(" ")}`,
+                            `Explain why ${specialtyLabelMap[topMapCompatibleSpecialty]} is currently prioritized for my case and what to ask in first visit.`,
                           )
                         }
                         disabled={sending}
                       >
-                        <FlaskConical className="mr-1 h-4 w-4" /> Generate Twin-Based Plan
+                        Why this?
                       </Button>
-                    </>
-                  )}
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
 
-          <Card>
+              <div className="flex gap-2">
+                <Button className="gradient-primary w-full border-0" onClick={handleFindClinics} disabled={searchingClinics}>
+                  {searchingClinics ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />} Find Clinics
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    void sendMessage(
+                      `Based on my trend signal (${trackerContext.riskSignal}) and latest context, which specialist should I prioritize first: gynecologist, endocrinologist, fertility specialist, dermatologist, or nutrition specialist?`,
+                    )
+                  }
+                  disabled={sending}
+                >
+                  <Stethoscope className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {mapError && <p className="text-xs text-destructive">{mapError}</p>}
+
+              <div className="h-64 overflow-hidden rounded-xl border border-border bg-muted/20">
+                {clinics.length === 0 ? (
+                  <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+                    Search a city and specialty to render clinics on map.
+                  </div>
+                ) : (
+                  <div ref={mapRootRef} className="h-full w-full" />
+                )}
+              </div>
+
+              <div className="max-h-64 space-y-2 overflow-auto pr-1">
+                {clinics.map((clinic) => (
+                  <div key={clinic.id} className="rounded-lg border border-border bg-background p-3">
+                    <p className="text-sm font-medium text-foreground">{clinic.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{clinic.address}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Type: {clinic.type}</p>
+                    <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                      {clinic.whyGood.map((reason) => (
+                        <li key={reason}>- {reason}</li>
+                      ))}
+                    </ul>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <a
+                        href={clinic.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs font-medium text-primary underline-offset-2 hover:underline"
+                      >
+                        Open in map source
+                      </a>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          void sendMessage(
+                            `I found this ${specialtyLabelMap[specialty]} option: ${clinic.name} at ${clinic.address}. Help me ask smart screening questions before booking.`,
+                          )
+                        }
+                        disabled={sending}
+                      >
+                        <Bot className="mr-1 h-3.5 w-3.5" /> Ask Copilot
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="twin" className="space-y-4 pt-2">
+              {healthTwinChartData.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Save at least two report snapshots in Analyzer to unlock health twin drift analytics.
+                </p>
+              ) : (
+                <>
+                  <div className="rounded-lg border border-border bg-muted/30 p-3">
+                    <p className="text-xs font-semibold text-foreground">Current Twin Level: {healthTwin.latestLevel}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{healthTwin.summary}</p>
+                  </div>
+
+                  <div className="h-52 rounded-lg border border-border bg-background p-2">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={healthTwinChartData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="dateLabel" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        <Line type="monotone" dataKey="driftScore" stroke="#0ea5e9" strokeWidth={2.2} name="Drift score" />
+                        <Line type="monotone" dataKey="outOfRange" stroke="#f97316" strokeWidth={1.8} name="Out-of-range" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="h-52 rounded-lg border border-border bg-background p-2">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={healthTwinChartData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="dateLabel" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                        <Tooltip />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        <Area type="monotone" dataKey="hormonalAbnormal" stroke="#ef4444" fill="#ef444433" name="Hormonal abnormal" />
+                        <Area type="monotone" dataKey="metabolicAbnormal" stroke="#8b5cf6" fill="#8b5cf633" name="Metabolic abnormal" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="space-y-2 rounded-lg border border-border bg-background p-3">
+                    <p className="text-xs font-semibold text-foreground">Drift Alerts</p>
+                    {healthTwin.driftAlerts.map((alert) => (
+                      <div key={alert} className="flex items-start gap-2 text-xs text-muted-foreground">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 text-amber-500" />
+                        <span>{alert}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() =>
+                      void sendMessage(
+                        `Use my Health Twin drift summary to prioritize care: ${healthTwin.summary}. Alerts: ${healthTwin.driftAlerts.join(" ")}`,
+                      )
+                    }
+                    disabled={sending}
+                  >
+                    <FlaskConical className="mr-1 h-4 w-4" /> Generate Twin-Based Plan
+                  </Button>
+                </>
+              )}
+            </TabsContent>
+          </Tabs>
+
+          <Card className="mt-5">
             <CardHeader>
               <CardTitle className="text-base">Live Context</CardTitle>
               <CardDescription>
-                Copilot context auto-updates from report tracker + simulation settings.
+                Copilot context auto-updates from report tracker and simulation settings.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-xs text-muted-foreground">
               <p>{trackerContext.summary}</p>
               <p>Worsening markers tracked: {trackerContext.worseningMarkers.length}</p>
               <p>Improving markers tracked: {trackerContext.improvingMarkers.length}</p>
-              <p>
-                Simulation doctor prompt: {simulationResult.doctorPrompt}
-              </p>
+              <p>Simulation doctor prompt: {simulationResult.doctorPrompt}</p>
             </CardContent>
           </Card>
-        </div>
-      </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };
