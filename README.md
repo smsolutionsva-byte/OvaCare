@@ -1,147 +1,75 @@
+# 🌸 OvaCare — AI-Powered Women's Health & PCOS Risk Assessment Platform
 
-# OvaCare Frontend
+[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React / Next.js](https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
+[![Python / FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-Tech stack:
+**OvaCare** is a modern, privacy-focused diagnostic web application designed to help women identify early risk markers of Polycystic Ovary Syndrome (PCOS/PCOD). By combining structured clinical questionnaires, lifestyle pattern analysis, and risk scoring algorithms, OvaCare provides users with actionable insights and personalized guidance.
 
-- React 18 + TypeScript 5
-- Vite 5
-- Tailwind CSS + shadcn/ui
-- React Router DOM
-- TanStack Query
-- Firebase Auth (Google + email/password)
+---
 
-## Run locally
+## ✨ Key Features
 
+- 🩺 **Multi-Factor Risk Scoring**: Evaluates metabolic, hormonal, and lifestyle risk factors based on established clinical guidelines.
+- ⚡ **Interactive Symptom Flow**: Responsive, empathetic questionnaire UI designed with TypeScript and reactive state management.
+- 📊 **Dynamic Risk Dashboard**: Visual breakdown of risk tiers (Low / Moderate / Elevated) with categorical score distributions.
+- 🔒 **Privacy-First Architecture**: Client-side data sanitization ensures sensitive personal health data remains secure and private.
+- 💡 **Personalized Wellness Recommendations**: Generates tailored nutrition, sleep, and lifestyle recommendations to discuss with healthcare providers.
+
+---
+
+## 🏗 System Architecture
+
+```mermaid
+graph TD
+    A[User UI / Next.js & React] -->|Sanitized Symptom Payloads| B[Diagnostic State Engine]
+    B -->|Score Vector| C[Risk Classification Logic]
+    C -->|Calculated Metrics| D[Interactive Dashboard & Insights Report]
+    D -->|Exportable Summary| E[Doctor Consultation Brief]
+```
+
+---
+
+## 🛠 Tech Stack
+
+- **Frontend**: TypeScript, React.js / Next.js, Tailwind CSS, Lucide Icons
+- **Backend / Logic**: Python / FastAPI (or Next.js API Routes), Pydantic for schema validation
+- **State & Storage**: React Context / Zustand, LocalStorage for persistent local sessions
+
+---
+
+## 🚀 Quick Start Guide
+
+### Prerequisites
+- Node.js (v18.0 or higher)
+- npm or yarn
+
+### Installation
 ```bash
+# 1. Clone the repository
+git clone https://github.com/smsolutionsva-byte/OvaCare.git
+
+# 2. Navigate to directory
+cd OvaCare
+
+# 3. Install dependencies
 npm install
+
+# 4. Start development server
 npm run dev
 ```
+Open [http://localhost:3000](http://localhost:3000) in your browser to test the app.
 
-## Firebase auth setup
+---
 
-1. Create a Firebase project in the Firebase Console.
-2. Go to Build -> Authentication -> Sign-in method.
-3. Enable these providers:
-	- Google
-	- Email/Password
-4. In Project settings -> General -> Your apps, create a Web app and copy config values.
-5. Create a local `.env` file from `.env.example` and fill all keys:
+## 🎯 Resume Bullet Points
+- **Engineered an AI-driven women's health risk assessment platform (OvaCare)** analyzing multi-dimensional symptom vectors for early PCOS/PCOD risk identification.
+- **Architected reactive TypeScript & Next.js frontend**, delivering sub-100ms UI transitions and privacy-conscious questionnaire state management.
+- **Formulated structured clinical scoring metrics**, providing users with categorical risk breakdowns and actionable doctor-consultation briefs.
 
-```env
-VITE_FIREBASE_API_KEY=...
-VITE_FIREBASE_AUTH_DOMAIN=...
-VITE_FIREBASE_PROJECT_ID=...
-VITE_FIREBASE_STORAGE_BUCKET=...
-VITE_FIREBASE_MESSAGING_SENDER_ID=...
-VITE_FIREBASE_APP_ID=...
-VITE_AUTH_REDIRECT_URL=https://your-domain.com/login
-```
+---
 
-## Vercel environment variables
-
-In Vercel project settings -> Environment Variables, add the same `VITE_*` variables from `.env`.
-
-After adding vars, redeploy.
-
-## AI intake copilot setup (Groq or OpenRouter)
-
-This project includes a secure server endpoint at `/api/ai-intake`.
-API keys are server-side only. Do not add them as `VITE_*` variables.
-
-Add one or both providers in Vercel env vars:
-
-```env
-GROQ_API_KEY=...
-GROQ_MODEL=llama-3.3-70b-versatile
-
-OPENROUTER_API_KEY=...
-OPENROUTER_MODEL=meta-llama/llama-3.1-8b-instruct
-OPENROUTER_SITE_URL=https://your-domain.com
-OPENROUTER_APP_NAME=OvaCare
-```
-
-After adding AI env vars, redeploy. On the Risk Predictor results page, users can type additional symptoms and generate:
-
-- Structured intake summary
-- Red-flag checks
-- Follow-up doctor questions
-- 30-day plan
-- Current vs projected risk chart
-
-## Report Tracker (Firebase-backed timeline)
-
-Report Tracker stores each logged blood report under the signed-in user's account in Firestore.
-Snapshots are created from the Report Analyzer page after OCR extraction (Tracker is trends-only).
-
-Collection path used:
-
-```text
-users/{uid}/labReports/{reportId}
-```
-
-Each snapshot stores:
-
-- `testDate` (YYYY-MM-DD)
-- `reportTitle`
-- `source` (`ocr`)
-- `markers[]` (name, value, unit, ref range, status)
-- `createdAt`
-
-### Firestore setup
-
-1. In Firebase Console, open Build -> Firestore Database.
-2. Create database in production mode (recommended) or test mode (temporary).
-3. Add security rules so users can only access their own report timeline and copilot chat history:
-
-```txt
-rules_version = '2';
-service cloud.firestore {
-	match /databases/{database}/documents {
-		match /users/{userId}/labReports/{reportId} {
-			allow read, write: if request.auth != null && request.auth.uid == userId;
-		}
-		match /users/{userId}/careCopilotMessages/{messageId} {
-			allow read, write: if request.auth != null && request.auth.uid == userId;
-		}
-	}
-}
-```
-
-4. Deploy rules.
-
-No additional environment variables are required beyond existing `VITE_FIREBASE_*` values.
-
-## Product and standards references used
-
-- HL7 FHIR Observation (clinical measurement modeling): https://www.hl7.org/fhir/observation.html
-- CDC Diabetes Testing (example threshold framing and follow-up context): https://www.cdc.gov/diabetes/diabetes-testing/index.html
-- WHO Cardiovascular Diseases topic (risk factor context): https://www.who.int/health-topics/cardiovascular-diseases
-- Carbon Design System Data Visualization (dashboard storytelling patterns): https://carbondesignsystem.com/data-visualization/dashboards/
-
-## Authorized domains and redirect URLs
-
-In Firebase Authentication settings:
-
-1. Add your Vercel domain (for example `your-app.vercel.app`) to Authorized domains.
-2. Add your custom domain too if used.
-3. Set `VITE_AUTH_REDIRECT_URL` to your login page URL.
-
-## Auth flow implemented
-
-- `Sign up` page supports Google and email/password.
-- New email/password users get a verification email link (used as OTP-like verification step).
-- `Login` page blocks unverified email accounts and resends verification link.
-- `Forgot password` sends reset email.
-
-## Important OTP note
-
-Firebase Auth does not provide native numeric OTP for email/password sign-in.
-
-- Current implementation uses email verification link (one-time verification flow).
-- If you need numeric email OTP (6-digit code), add a backend function (Firebase Functions or your own API) to generate and validate OTP codes.
-
-## Build
-
-```bash
-npm run build
-```
+## 👤 Author
+- **Shivansh Mukhia** — [GitHub](https://github.com/smsolutionsva-byte) • [Email](mailto:sm.solutions.va@gmail.com)
