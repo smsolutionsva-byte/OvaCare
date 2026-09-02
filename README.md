@@ -57,9 +57,18 @@ cd OvaCare
 # 3. Install dependencies
 npm install
 
-# 4. Start development server
+# 4. Create your local environment file
+cp .env.example .env
+
+# 5. Add your Firebase configuration to .env, then start the server
 npm run dev
 ```
+
+The `VITE_FIREBASE_*` values configure Firebase in the browser. Values prefixed
+with `VITE_` are included in the client bundle and must never contain private
+credentials. Keep `GROQ_API_KEY` and `OPENROUTER_API_KEY` server-side by setting
+them in your deployment platform; do not prefix them with `VITE_`.
+
 Open [http://localhost:3000](http://localhost:3000) in your browser to test the app.
 
 ---
